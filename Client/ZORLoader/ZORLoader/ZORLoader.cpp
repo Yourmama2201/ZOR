@@ -51,10 +51,11 @@ static std::wstring RandomWStringFrom(const wchar_t* const* pool, int count) {
 }
 
 static void InitDisguise() {
-    int n = sizeof(g_legitNames) / sizeof(g_legitNames[0]);
-    g_fakeName = RandomWStringFrom(g_legitNames, n);
-    g_fakeClass = RandomWStringFrom(g_legitNames, n);
-    g_fakeExeName = g_fakeName + L".exe";
+    // Fixed identity every launch - no random rename. The loader always runs
+    // as ZORLoader.exe with a stable window/log name.
+    g_fakeName = L"ZORLoader";
+    g_fakeClass = L"ZORLoader";
+    g_fakeExeName = L"ZORLoader.exe";
 }
 
 // Self-rename: copy this exe to a random fake name and relaunch, then kill the
@@ -126,12 +127,17 @@ static bool DownloadToMemory(const wchar_t* url, std::vector<BYTE>& out) {
             if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
                 WinHttpReceiveResponse(hReq, NULL)) {
-                DWORD avail = 0;
-                BYTE buf[16384];
-                while (WinHttpQueryDataAvailable(hReq, &avail) && avail > 0) {
-                    DWORD read = 0;
-                    if (!WinHttpReadData(hReq, buf, min(avail, (DWORD)sizeof(buf)), &read) || read == 0) break;
-                    out.insert(out.end(), buf, buf + read);
+                DWORD status = 0, statusLen = sizeof(status);
+                WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusLen, WINHTTP_NO_HEADER_INDEX);
+                if (status == 200) {
+                    DWORD avail = 0;
+                    BYTE buf[16384];
+                    while (WinHttpQueryDataAvailable(hReq, &avail) && avail > 0) {
+                        DWORD read = 0;
+                        if (!WinHttpReadData(hReq, buf, min(avail, (DWORD)sizeof(buf)), &read) || read == 0) break;
+                        out.insert(out.end(), buf, buf + read);
+                    }
                 }
                 ok = !out.empty();
             }
@@ -161,6 +167,21 @@ static std::wstring WriteHiddenTemp(const std::vector<BYTE>& data, const wchar_t
     CloseHandle(hFile);
     if (!w || written != data.size()) { DeleteFileW(full.c_str()); return L""; }
     return full;
+}
+
+// Read a whole file into a byte vector. Returns false on any failure.
+static bool ReadFileToVector(const char* path, std::vector<BYTE>& out) {
+    out.clear();
+    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD fileSize = GetFileSize(hFile, NULL);
+    if (fileSize == 0 || fileSize == INVALID_FILE_SIZE) { CloseHandle(hFile); return false; }
+    out.resize(fileSize);
+    DWORD bytesRead = 0;
+    BOOL ok = ReadFile(hFile, out.data(), fileSize, &bytesRead, NULL);
+    CloseHandle(hFile);
+    if (!ok || bytesRead != fileSize) { out.clear(); return false; }
+    return true;
 }
 
 // ============================================================================
@@ -201,6 +222,35 @@ public:
 };
 
 static DebugLogger* g_Debug = nullptr;
+
+// Copy the on-screen console contents to the Windows clipboard.
+static void CopyConsoleToClipboard(HWND hwnd) {
+    EnterCriticalSection(&g_logLock);
+    std::wstring all;
+    for (size_t i = 0; i < g_log.size(); i++) {
+        all += g_log[i];
+        all += L"\r\n";
+    }
+    LeaveCriticalSection(&g_logLock);
+    if (all.empty()) return;
+
+    if (!OpenClipboard(hwnd)) return;
+    EmptyClipboard();
+    size_t bytes = (all.size() + 1) * sizeof(wchar_t);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (hMem) {
+        wchar_t* dst = (wchar_t*)GlobalLock(hMem);
+        if (dst) {
+            wcscpy_s(dst, all.size() + 1, all.c_str());
+            GlobalUnlock(hMem);
+            SetClipboardData(CF_UNICODETEXT, hMem);
+        } else {
+            GlobalFree(hMem);
+        }
+    }
+    CloseClipboard();
+    if (g_Debug) g_Debug->Log("[+] Console copied to clipboard");
+}
 
 // ============================================================================
 //  kdmapper: map unsigned driver via a signed-but-vulnerable driver (BYOVD).
@@ -288,14 +338,16 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
 static const int WIN_W = 760;
 static const int WIN_H = 560;
 
-static const Color ACCENT(255, 242, 89, 0);        // zor orange
-static const Color ACCENT_DIM(200, 242, 89, 0);
-static const Color BG_TOP(255, 12, 12, 18);
-static const Color BG_BOT(255, 20, 20, 30);
-static const Color CARD_BG(200, 26, 26, 38);
-static const Color CARD_BORDER(120, 60, 60, 80);
+static const Color ACCENT(255, 0, 229, 255);        // neon cyan
+static const Color ACCENT_DIM(200, 0, 229, 255);
+static const Color NEON_PINK(255, 255, 0, 128);      // neon magenta
+static const Color NEON_PURPLE(255, 124, 0, 255);
+static const Color BG_TOP(255, 8, 8, 22);
+static const Color BG_BOT(255, 22, 12, 46);
+static const Color CARD_BG(190, 24, 20, 52);
+static const Color CARD_BORDER(150, 0, 229, 255);
 static const Color TEXT_MAIN(255, 235, 235, 240);
-static const Color TEXT_DIM(255, 150, 150, 160);
+static const Color TEXT_DIM(255, 160, 160, 180);
 static const Color GREEN(255, 60, 220, 110);
 static const Color RED(255, 240, 70, 70);
 static const Color YELLOW(255, 240, 200, 70);
@@ -319,6 +371,8 @@ static bool g_working = false;
 static bool g_injected = false;
 static bool g_btnHover = false;
 static bool g_btnDown = false;
+static bool g_copyHover = false;
+static bool g_copyDown = false;
 static Font* g_fontTitle = NULL;
 static Font* g_fontBig = NULL;
 static Font* g_fontNormal = NULL;
@@ -469,6 +523,27 @@ DWORD WINAPI InjectThread(LPVOID) {
     bool haveDrvBytes  = DownloadToMemory(g_remoteDriverUrl, remoteDrv);
     bool haveKdmapper  = DownloadToMemory(g_remoteKdmapperUrl, kdmData);
     bool haveRemoteDll = DownloadToMemory(g_remoteDllUrl, remoteDll);
+
+    // Local fallback: if the GitHub release isn't live yet, load the built
+    // artifacts straight from the repo so the whole flow still works offline.
+    if (!haveDrvBytes) {
+        const char* p = FindExisting(
+            "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver\\nxs_drv.sys",
+            "..\\..\\..\\Driver\\nxs_drv.sys");
+        if (ReadFileToVector(p, remoteDrv)) {
+            haveDrvBytes = true;
+            g_Debug->Log("Driver loaded from local: " + std::string(p));
+        }
+    }
+    if (!haveKdmapper) {
+        const char* p = FindExisting(
+            "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Tools\\kdmapper\\kdmapper.exe",
+            "..\\..\\..\\Tools\\kdmapper\\kdmapper.exe");
+        if (ReadFileToVector(p, kdmData)) {
+            haveKdmapper = true;
+            g_Debug->Log("kdmapper loaded from local: " + std::string(p));
+        }
+    }
 
     std::string dllPath;
     if (haveRemoteDll) {
@@ -694,11 +769,29 @@ static void DrawScene(HWND hwnd) {
     LinearGradientBrush bg(Rect(0, 0, W, H), BG_TOP, BG_BOT, 90.0f);
     g.FillRectangle(&bg, full);
 
-    // accent glow (animated)
-    float glowX = (float)(W / 2) + sinf(g_pulse * 0.8f) * 60.0f;
-    LinearGradientBrush glow(PointF(glowX - 300.0f, 0), PointF(glowX + 300.0f, 0),
-        Color(25, 242, 89, 0), Color(0, 242, 89, 0));
-    g.FillRectangle(&glow, RectF(glowX - 300.0f, -100.0f, 600.0f, 400.0f));
+    // ---- neon background: drifting glow orbs ----
+    struct Orb { float cx, cy, r; DWORD a; Color c; float sx, sy; };
+    Orb orbs[4] = {
+        { (float)W * 0.20f, (float)H * 0.18f, 240.0f, 70, NEON_PURPLE, 0.40f, 0.22f },
+        { (float)W * 0.78f, (float)H * 0.15f, 200.0f, 60, ACCENT,      0.55f, 0.30f },
+        { (float)W * 0.62f, (float)H * 0.80f, 260.0f, 55, NEON_PINK,   0.50f, 0.18f },
+        { (float)W * 0.35f, (float)H * 0.72f, 180.0f, 45, ACCENT,      0.35f, 0.40f },
+    };
+    for (int i = 0; i < 4; i++) {
+        float ox = orbs[i].cx + sinf(g_pulse * orbs[i].sx + i * 1.7f) * 60.0f;
+        float oy = orbs[i].cy + cosf(g_pulse * orbs[i].sy + i * 2.3f) * 40.0f;
+        LinearGradientBrush orb(PointF(ox - orbs[i].r, oy - orbs[i].r),
+            PointF(ox + orbs[i].r, oy + orbs[i].r),
+            Color((BYTE)orbs[i].a, orbs[i].c.GetR(), orbs[i].c.GetG(), orbs[i].c.GetB()),
+            Color(0, orbs[i].c.GetR(), orbs[i].c.GetG(), orbs[i].c.GetB()));
+        g.FillEllipse(&orb, RectF(ox - orbs[i].r, oy - orbs[i].r, orbs[i].r * 2.0f, orbs[i].r * 2.0f));
+    }
+
+    // neon scanline sweep
+    float sweepY = fmodf(g_pulse * 140.0f, (float)H + 120.0f) - 60.0f;
+    LinearGradientBrush sweep(PointF(0, sweepY - 90.0f), PointF(0, sweepY + 90.0f),
+        Color(0, 255, 255, 255), Color(0, 255, 255, 255));
+    g.FillRectangle(&sweep, RectF(0, sweepY - 90.0f, (float)W, 180.0f));
 
     // top accent line
     SolidBrush accentLine(ACCENT);
@@ -707,7 +800,9 @@ static void DrawScene(HWND hwnd) {
     // ---- header ----
     GText(g, L"ZOR", *g_fontTitle, RectF(28, 22, 120, 44), ACCENT);
     GText(g, L"LOADER v8.0", *g_fontSmall, RectF(28, 64, 160, 20), TEXT_DIM);
-    GText(g, L"the best cheat known :)", *g_fontNormal, RectF(28, 84, 260, 20), TEXT_DIM);
+    GText(g, L"the best cheat made by eddie", *g_fontNormal, RectF(28, 84, 320, 20), NEON_PINK);
+    GText(g, L"support: dc @spokenedwin // tg @spookyeddie", *g_fontSmall,
+        RectF(28, 108, 420, 16), TEXT_DIM);
 
     // connection dot
     Color dotCol = g_injected ? GREEN : ACCENT;
@@ -720,7 +815,7 @@ static void DrawScene(HWND hwnd) {
     // ---- status cards ----
     const wchar_t* icons[] = { L"SHIELD", L"GAME", L"INJECT" };
     float cardW = (float)((W - 56 - 24) / 3);
-    float cardY = 120.0f;
+    float cardY = 142.0f;
     for (int i = 0; i < 3; i++) {
         float x = 28.0f + i * (cardW + 12.0f);
         RectF card(x, cardY, cardW, 92.0f);
@@ -751,17 +846,17 @@ static void DrawScene(HWND hwnd) {
     float btnX = (float)(W - btnW) / 2.0f, btnY = 248.0f;
     RectF btn(btnX, btnY, btnW, btnH);
     if (g_btnHover) {
-        FillRoundRect(g, btn, 14.0f, Color(220, 255, 110, 20));
-        if (g_btnDown) FillRoundRect(g, btn, 14.0f, Color(255, 200, 80, 10));
+        FillRoundRect(g, btn, 14.0f, Color(220, 60, 110, 255));
+        if (g_btnDown) FillRoundRect(g, btn, 14.0f, Color(255, 40, 90, 220));
     } else {
-        FillRoundRect(g, btn, 14.0f, Color(200, 60, 25, 10));
+        FillRoundRect(g, btn, 14.0f, Color(200, 24, 40, 90));
     }
-    StrokeRoundRect(g, btn, 14.0f, g_btnHover ? ACCENT : Color(150, 242, 89, 0), 1.5f);
+    StrokeRoundRect(g, btn, 14.0f, g_btnHover ? ACCENT : Color(150, 0, 229, 255), 1.5f);
 
     if (g_working) {
         // animated progress bar inside button
         float pw = fmodf(g_pulse, 1.0f);
-        FillRoundRect(g, RectF(btnX + 8, btnY + 8, (btnW - 16) * pw, btnH - 16), 10.0f, Color(120, 242, 89, 0));
+        FillRoundRect(g, RectF(btnX + 8, btnY + 8, (btnW - 16) * pw, btnH - 16), 10.0f, Color(120, 0, 229, 255));
         GText(g, L"WORKING...", *g_fontBig, btn, Color(255, 255, 255, 255), StringAlignmentCenter);
     } else if (g_injected) {
         GText(g, L"INJECTED", *g_fontBig, btn, GREEN, StringAlignmentCenter);
@@ -775,6 +870,16 @@ static void DrawScene(HWND hwnd) {
     FillRoundRect(g, logBox, 10.0f, Color(190, 18, 18, 28));
     StrokeRoundRect(g, logBox, 10.0f, CARD_BORDER, 1.0f);
     GText(g, L"CONSOLE", *g_fontSmall, RectF(40, logY + 8, 100, 16), TEXT_DIM);
+
+    // COPY button (top-right of console panel)
+    {
+        RectF copyBtn(logBox.GetRight() - 86.0f, logY + 6.0f, 64.0f, 20.0f);
+        FillRoundRect(g, copyBtn, 6.0f, g_copyDown ? Color(220, 0, 229, 255) :
+            (g_copyHover ? Color(160, 40, 90, 200) : Color(120, 24, 40, 90)));
+        StrokeRoundRect(g, copyBtn, 6.0f, g_copyHover ? ACCENT : Color(100, 0, 160, 200), 1.0f);
+        GText(g, L"COPY", *g_fontSmall, copyBtn, g_copyHover ? Color(255, 255, 255, 255) : TEXT_DIM,
+            StringAlignmentCenter, StringAlignmentCenter);
+    }
 
     // log lines (scrolled to bottom)
     EnterCriticalSection(&g_logLock);
@@ -794,7 +899,7 @@ static void DrawScene(HWND hwnd) {
     LeaveCriticalSection(&g_logLock);
 
     // watermark
-    GText(g, L"ZOR // system v8", *g_fontSmall, RectF(28, (float)(H - 22), 200, 16), Color(120, 90, 90, 100));
+    GText(g, L"ZOR // system v8 // eddie", *g_fontSmall, RectF(28, (float)(H - 22), 220, 16), Color(130, 0, 160, 200));
 
     // blit
     Graphics mb(memDC);
@@ -824,6 +929,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             float btnX = (float)(rc.right - 300) / 2.0f;
             bool hover = (pt.x >= btnX && pt.x <= btnX + 300 && pt.y >= 248 && pt.y <= 248 + 64);
             if (hover != g_btnHover) { g_btnHover = hover; InvalidateRect(hwnd, NULL, FALSE); }
+            // COPY button: (right - 58 .. right - 22) x (logY+6 .. logY+26)
+            float logY = 336.0f;
+            bool cHover = (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+                           pt.y >= logY + 6 && pt.y <= logY + 26);
+            if (cHover != g_copyHover) { g_copyHover = cHover; InvalidateRect(hwnd, NULL, FALSE); }
             return 0;
         }
         case WM_LBUTTONDOWN: {
@@ -838,12 +948,34 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 InvalidateRect(hwnd, NULL, FALSE);
             }
+            float logY = 336.0f;
+            if (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+                pt.y >= logY + 6 && pt.y <= logY + 26) {
+                g_copyDown = true;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
             return 0;
         }
         case WM_LBUTTONUP: {
+            RECT rc; GetClientRect(hwnd, &rc);
+            POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            float logY = 336.0f;
+            bool wasCopyDown = g_copyDown;
+            g_copyDown = false;
             g_btnDown = false;
+            if (wasCopyDown && pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+                pt.y >= logY + 6 && pt.y <= logY + 26) {
+                CopyConsoleToClipboard(hwnd);
+            }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
+        }
+        case WM_KEYDOWN: {
+            if (wp == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                CopyConsoleToClipboard(hwnd);
+                return 0;
+            }
+            break;
         }
         case WM_ERASEBKGND:
             return 1;

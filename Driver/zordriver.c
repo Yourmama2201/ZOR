@@ -113,7 +113,19 @@ static BOOLEAN IsValidUserAddress(ULONG_PTR address, SIZE_T size) {
 
 PDEVICE_OBJECT g_DeviceObject = NULL;
 UNICODE_STRING g_DevName, g_SymLink;
-PDRIVER_OBJECT g_FakeDriverObject = NULL;
+
+// Documented NT export (not declared in this WDK's headers). Creates a REAL
+// DRIVER_OBJECT via ObCreateObject + ObInsertObject and calls the supplied
+// entry routine with it -- so IoCreateDevice's internal ObfReferenceObject
+// sees a valid object header (a pool-allocated fake object BSODs with 0x18).
+NTKERNELAPI
+NTSTATUS
+IoCreateDriver(
+    _In_opt_ PUNICODE_STRING DriverName,
+    _In_ PDRIVER_INITIALIZE InitializationRoutine
+    );
+
+static NTSTATUS RealDriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry);
 
 typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY InLoadOrderLinks;
@@ -685,25 +697,13 @@ VOID DriverUnload(PDRIVER_OBJECT driver) {
         g_DeviceObject = NULL;
     }
     IoDeleteSymbolicLink(&g_SymLink);
-    if (g_FakeDriverObject) {
-        ExFreePoolWithTag(g_FakeDriverObject, 0x5A4F5244);
-        g_FakeDriverObject = NULL;
-    }
 }
 
-NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry) {
+// Real driver init: the DRIVER_OBJECT handed here is a genuine kernel object
+// (either from the I/O manager for SCM-loaded drivers, or from IoCreateDriver
+// for manual-mapped drivers), so IoCreateDevice is safe to call.
+static NTSTATUS RealDriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry) {
     UNREFERENCED_PARAMETER(registry);
-
-    // Manual-mapped (kdmapper) drivers get a NULL DriverObject. IoCreateDevice
-    // needs a real DRIVER_OBJECT, so hand it a non-paged fake one. Normally
-    // loaded drivers use the SCM-provided object instead.
-    if (!driver) {
-        g_FakeDriverObject = (PDRIVER_OBJECT)ExAllocatePoolWithTag(
-            NonPagedPool, sizeof(DRIVER_OBJECT), 0x5A4F5244);
-        if (!g_FakeDriverObject) return STATUS_INSUFFICIENT_RESOURCES;
-        RtlZeroMemory(g_FakeDriverObject, sizeof(DRIVER_OBJECT));
-        driver = g_FakeDriverObject;
-    }
 
     driver->DriverUnload = DriverUnload;
 
@@ -736,4 +736,19 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry) {
     }
 
     return STATUS_SUCCESS;
+}
+
+NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry) {
+    UNREFERENCED_PARAMETER(registry);
+
+    // Manual-mapped (kdmapper) drivers are called with a NULL DriverObject.
+    // IoCreateDevice needs a REAL DRIVER_OBJECT with a valid object header.
+    // IoCreateDriver allocates a genuine one (via ObCreateObject) and then
+    // invokes RealDriverEntry with it -- no fake pool object, no 0x18 BSOD.
+    if (!driver) {
+        return IoCreateDriver(NULL, RealDriverEntry);
+    }
+
+    // SCM-loaded drivers: use the I/O manager-provided object directly.
+    return RealDriverEntry(driver, registry);
 }
