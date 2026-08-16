@@ -12,6 +12,7 @@
 #include "player.hpp"
 #include "offsets.hpp"
 #include "memory.hpp"
+#include "Features/Exploits/camo_changer.hpp"
 
 static std::mt19937 g_rng(std::random_device{}());
 
@@ -83,9 +84,10 @@ private:
     bool *weaponNames, *squadCount, *itemRarity;
 
     bool *noRecoil, *noSpread, *rapidFire; int *rapidFireDelay;
-    bool *infiniteAmmo, *instantSwap, *autoFire, *instantReload;
+    bool *infiniteAmmo;
     int *weaponAmmoMod;
     bool *fastReload; float *reloadSpeed;
+    int *activeCamo;
 
     bool *radarEnabled, *radarRotate; float *radarRange, *radarSize, *radarOpacity;
     bool *radarShowEnemies, *radarShowTeammates, *radarShowVehicles, *radarShowAI;
@@ -212,6 +214,11 @@ private:
         if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         ImGui::SameLine();
     }
+    const char* camoPreview() {
+        if (!activeCamo || *activeCamo < 0) return "Disabled";
+        for (const auto& c : kCamos) if (c.id == *activeCamo) return c.name;
+        return "Unknown";
+    }
     // Colored switch/pill toggle instead of a plain checkbox
     void Switch(const char* l, bool* v) {
         ImGui::PushID(l);
@@ -337,6 +344,21 @@ private:
             T("Fast Reload", fastReload, "Speed up reload times");
             if (*fastReload && reloadSpeed) ImGui::SliderFloat("Reload Speed", reloadSpeed, 0.05f, 1.0f, "%.2f");
             T("Infinite Ammo", infiniteAmmo, "Never run out of ammo");
+            End();
+        }
+        if (Sub("Camo Changer")) {
+            if (activeCamo) {
+                if (ImGui::BeginCombo("Camo", camoPreview())) {
+                    if (ImGui::Selectable("Disabled", *activeCamo < 0)) *activeCamo = -1;
+                    ImGui::Separator();
+                    for (const auto& c : kCamos) {
+                        bool sel = (*activeCamo == c.id);
+                        if (ImGui::Selectable(c.name, sel)) *activeCamo = c.id;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            }
             End();
         }
     }
@@ -555,9 +577,8 @@ public:
         bool* hud, bool* wm, bool* cmp, bool* gm, bool* tm,
         bool* vo, bool* vi, bool* np,
         bool* wn, bool* sc, bool* ir,
-        bool* nr, bool* ns, bool* rf, int* rd, bool* ia, bool* isw,
-        bool* afr, bool* irl, int* amm,
-        bool* fr_, float* rs_,
+        bool* nr, bool* ns, bool* rf, int* rd, bool* ia, int* amm,
+        bool* fr_, float* rlspd_, int* cam_,
         bool* rad, bool* rr, float* rrg, float* rsz, float* ro,
         bool* re, bool* rt, bool* rv, bool* ra,
         bool* bh_, bool* js_, bool* ssl, bool* sst, bool* ast_,
@@ -607,9 +628,10 @@ public:
         weaponNames=wn; squadCount=sc; itemRarity=ir;
 
         noRecoil=nr; noSpread=ns; rapidFire=rf; rapidFireDelay=rd;
-        infiniteAmmo=ia; instantSwap=isw; autoFire=afr; instantReload=irl;
+        infiniteAmmo=ia;
         weaponAmmoMod=amm;
-        fastReload=fr_; reloadSpeed=rs_;
+        fastReload=fr_; reloadSpeed=rlspd_;
+        activeCamo=cam_;
 
         radarEnabled=rad; radarRotate=rr; radarRange=rrg; radarSize=rsz; radarOpacity=ro;
         radarShowEnemies=re; radarShowTeammates=rt; radarShowVehicles=rv; radarShowAI=ra;

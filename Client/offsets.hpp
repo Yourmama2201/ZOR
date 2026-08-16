@@ -20,6 +20,7 @@ namespace Offsets {
     constexpr uintptr_t LOCAL_INDEX_POS = 0x2F0;
     constexpr uintptr_t GAME_MODE = 0xF07D000;
     constexpr uintptr_t WEAPON_DEFS = 0x11886930;
+    constexpr uintptr_t WEAPON_INIT = 0x11A4;
     constexpr uintptr_t NAME_ARRAY = 0x119C48F8;
     constexpr uintptr_t NAME_ARRAY_POS = 0x5E80;
     constexpr uintptr_t NAME_ARRAY_SIZE = 0xD8;

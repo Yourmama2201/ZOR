@@ -77,5 +77,9 @@ static std::vector<SigPattern> GetPatterns() {
         {"TIMESTAMP",
         "48 8B 05 ? ? ? ? 48 85 C0 74 ? 48 8B 40 ? 8B 80 ? ? ? ? C3",
         3, true, "Game timestamp pointer"},
+
+        {"WEAPON_INIT",
+        "48 8B 05 ? ? ? ? 48 8B 08 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 8B 88 ? ? ? ? 48 85 C9",
+        3, true, "Weapon init: local current-weapon struct pointer"},
     };
 }

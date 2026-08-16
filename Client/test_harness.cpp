@@ -61,9 +61,10 @@ bool  g_espEnabled = true, g_wallhack = true, g_vehicleESP = true, g_lootESP = t
       g_weaponNames = true, g_squadCount = true, g_itemRarity = true;
 
 bool  g_noRecoil = true, g_noSpread = true, g_rapidFire = false,
-      g_infiniteAmmo = false, g_instantSwap = false,
-      g_autoFire = false, g_instantReload = false;
+      g_infiniteAmmo = false, g_fastReload = false;
 int   g_rapidFireDelay = 10, g_weaponAmmoMod = 0;
+float g_reloadSpeed = 0.25f;
+int   g_activeCamo = -1;
 int   g_espBoxStyle = 0;
 
 bool  g_radarEnabled = true, g_radarRotate = true,
@@ -383,7 +384,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         &g_visibleOnly,&g_visibilityIndicator,&g_grenadePrediction,
         &g_weaponNames,&g_squadCount,&g_itemRarity,
         &g_noRecoil,&g_noSpread,&g_rapidFire,&g_rapidFireDelay,
-        &g_infiniteAmmo,&g_instantSwap,&g_autoFire,&g_instantReload,&g_weaponAmmoMod,
+        &g_infiniteAmmo,&g_weaponAmmoMod,&g_fastReload,&g_reloadSpeed,
+        &g_activeCamo,
         &g_radarEnabled,&g_radarRotate,&g_radarRange,&g_radarSize,&g_radarOpacity,
         &g_radarShowEnemies,&g_radarShowTeammates,&g_radarShowVehicles,&g_radarShowAI,
         &g_bhopEnabled,&g_jumpSpam,&g_superSlide,&g_superStrafe,&g_airStrafing,

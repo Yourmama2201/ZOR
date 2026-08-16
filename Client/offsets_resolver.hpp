@@ -38,6 +38,10 @@ private:
             "48 8B 0D ? ? ? ? E8 ? ? ? ? 48 8B D8 48 85 C0 74 ? 48 8D 55",
             3, true));
 
+        scanner.AddSignature(Signature("WEAPON_INIT",
+            "48 8B 05 ? ? ? ? 48 8B 08 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 8B 88 ? ? ? ? 48 85 C9",
+            3, true));
+
         scanner.AddSignature(Signature("ACTIVE_STATE",
             "48 8B 0D ? ? ? ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 8B 88 ? ? ? ? E8",
             3, true));
@@ -88,7 +92,8 @@ public:
     void ResolveAllPointers(uintptr_t& cameraBase, uintptr_t& distribute,
         uintptr_t& boneBase, uintptr_t& cmdArray,
         uintptr_t& weaponDefs, uintptr_t& activeState,
-        uintptr_t& nameArray, uintptr_t& gameMode) {
+        uintptr_t& nameArray, uintptr_t& gameMode,
+        uintptr_t& weaponInit) {
 
         cameraBase = ResolveWithFallback("CAMERA_BASE", Offsets::CAMERA_BASE);
         distribute = ResolveWithFallback("DISTRIBUTE", Offsets::DISTRIBUTE);
@@ -98,5 +103,6 @@ public:
         activeState = ResolveWithFallback("ACTIVE_STATE", Offsets::ACTIVE_STATE);
         nameArray = ResolveWithFallback("NAME_ARRAY", Offsets::NAME_ARRAY);
         gameMode = ResolveWithFallback("GAME_MODE", Offsets::GAME_MODE);
+        weaponInit = ResolveWithFallback("WEAPON_INIT", Offsets::WEAPON_INIT);
     }
 };

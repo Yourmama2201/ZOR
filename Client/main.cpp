@@ -20,6 +20,7 @@
 
 #include "Features/Exploits/weapon_exploits.hpp"
 #include "Features/Exploits/weapon_editor.hpp"
+#include "Features/Exploits/camo_changer.hpp"
 #include "Features/Aimbot/silent_aim.hpp"
 #include "Features/AntiAim/anti_aim.hpp"
 #include "Features/Radar/radar.hpp"
@@ -93,6 +94,7 @@ Menu* g_menu = nullptr;
 
 WeaponExploits* g_weaponExp = nullptr;
 WeaponEditor* g_weaponEditor = nullptr;
+CamoChanger* g_camoChanger = nullptr;
 SilentAim* g_silentAim = nullptr;
 AntiAim* g_antiAim = nullptr;
 Radar* g_radar = nullptr;
@@ -168,6 +170,7 @@ bool  g_noRecoil = true, g_noSpread = true, g_rapidFire = false,
       g_infiniteAmmo = false, g_fastReload = false;
 int   g_rapidFireDelay = 10, g_weaponAmmoMod = 0;
 int   g_espBoxStyle = 0;
+int   g_activeCamo = -1;
 float g_reloadSpeed = 0.25f;
 
 bool  g_radarEnabled = true, g_radarRotate = true,
@@ -286,6 +289,7 @@ void SaveConfig() {
     s("fastreload",g_fastReload); sf("rspd",g_reloadSpeed);
     s("ammo",g_infiniteAmmo);
     si("ammmod",g_weaponAmmoMod);
+    si("camo",g_activeCamo);
     s("radar",g_radarEnabled); s("rrot",g_radarRotate); sf("rrange",g_radarRange); sf("rsize",g_radarSize); sf("ropac",g_radarOpacity);
     s("ren",g_radarShowEnemies); s("rtm",g_radarShowTeammates); s("rveh",g_radarShowVehicles); s("rai",g_radarShowAI);
     s("bhop",g_bhopEnabled); s("jumpspam",g_jumpSpam); s("superslide",g_superSlide); s("superstrafe",g_superStrafe); s("airstrafe",g_airStrafing);
@@ -342,6 +346,7 @@ void LoadConfig() {
     g_fastReload=b("fastreload",0); g_reloadSpeed=f("rspd",0.25f);
     g_infiniteAmmo=b("ammo",0);
     g_weaponAmmoMod=i("ammmod",0);
+    g_activeCamo=i("camo",-1);
     g_radarEnabled=b("radar",1); g_radarRotate=b("rrot",1); g_radarRange=f("rrange",300); g_radarSize=f("rsize",200); g_radarOpacity=f("ropac",0.55f);
     g_radarShowEnemies=b("ren",1); g_radarShowTeammates=b("rtm",1); g_radarShowVehicles=b("rveh",1); g_radarShowAI=b("rai",1);
     g_bhopEnabled=b("bhop",0); g_jumpSpam=b("jumpspam",0); g_superSlide=b("superslide",0); g_superStrafe=b("superstrafe",0); g_airStrafing=b("airstrafe",0);
@@ -413,6 +418,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
     g_triggerbot = new Triggerbot(g_mem, g_gameBase);
     g_weaponExp = new WeaponExploits(g_mem, g_gameBase);
     g_weaponEditor = new WeaponEditor(g_mem, g_gameBase);
+    g_camoChanger = new CamoChanger(g_mem, g_gameBase);
     g_silentAim = new SilentAim(g_mem, g_gameBase);
     g_antiAim = new AntiAim(g_mem, g_gameBase);
     g_radar = new Radar(g_mem, g_gameBase);
@@ -456,6 +462,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
         &g_weaponNames,&g_squadCount,&g_itemRarity,
         &g_noRecoil,&g_noSpread,&g_rapidFire,&g_rapidFireDelay,
         &g_infiniteAmmo,&g_weaponAmmoMod,&g_fastReload,&g_reloadSpeed,
+        &g_activeCamo,
         &g_radarEnabled,&g_radarRotate,&g_radarRange,&g_radarSize,&g_radarOpacity,
         &g_radarShowEnemies,&g_radarShowTeammates,&g_radarShowVehicles,&g_radarShowAI,
         &g_bhopEnabled,&g_jumpSpam,&g_superSlide,&g_superStrafe,&g_airStrafing,
@@ -610,6 +617,9 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
                 g_weaponEditor->SetAmmoModifier(g_weaponAmmoMod);
                 g_weaponEditor->Run();
             }
+
+            // ---- Camo Changer ----
+            if (g_activeCamo >= 0) { g_camoChanger->SetCamo(g_activeCamo); g_camoChanger->Run(); }
 
             // ---- Anti Aim ----
             if (g_antiAimEnabled) { g_antiAim->SetEnabled(true); g_antiAim->SetMode(g_antiAimMode);
