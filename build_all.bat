@@ -1,11 +1,11 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ========================================
-echo   BUILD ALL
+echo   BUILD ALL - ZORMenu
 echo ========================================
 echo.
 
-echo [1/2] Building Client DLL + Loader...
+echo [1/3] Building Client DLL + Loader...
 cd /d "%~dp0Client"
 call build_client.bat
 if %ERRORLEVEL% neq 0 (
@@ -15,13 +15,26 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [2/2] Build complete - no WDK available for driver
-echo     Pre-built driver at: %~dp0Driver2.0\x64\Release\nxs_drv.sys
+echo [2/3] Building Kernel Driver...
+cd /d "%~dp0Driver"
+call build_driver.bat
+if %ERRORLEVEL% neq 0 (
+    echo WARNING: Driver build failed (pre-built sys still usable)
+)
+
+echo.
+echo [3/3] Building Offset Grabber...
+cd /d "%~dp0Tools\OffsetDumper"
+call build_dumper.bat 2>nul
+if %ERRORLEVEL% neq 0 echo WARNING: Grabber build failed (use existing graboffsets.exe)
+
 echo.
 echo ========================================
 echo  OUTPUT FILES:
-echo    %~dp0Client\nxs_core.dll
-echo    %~dp0Client\ZORLoader\ZORLoader\nxs_loader.exe (rename ZORLoader folder)
+echo    %~dp0Client\x64\Release\ZORClient.dll
+echo    %~dp0Client\ZORLoader\ZORLoader\x64\Release\ZORLoader.exe
+echo    %~dp0Driver\nxs_drv.sys
+echo    %~dp0Tools\OffsetDumper\graboffsets.exe
 echo ========================================
 echo.
 pause
