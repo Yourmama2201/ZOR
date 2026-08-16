@@ -89,9 +89,9 @@ static NTSTATUS ResolveNtdllRoutines() {
     if (!g_LdrLoadDll || !g_LdrGetProcAddr) return STATUS_UNSUCCESSFUL;
     return STATUS_SUCCESS;
 }
+#define DEVICE_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x06,0x00,0x15,0x08,0x5A}
 
-#define DEVICE_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x06,0x00,0x15,0x08,0}
-#define SYMLINK_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x35,0x29,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x29,0x06,0x00,0x15,0x08,0}
+#define SYMLINK_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x35,0x29,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x29,0x06,0x00,0x15,0x08,0x5A}
 
 #define MAX_MEMORY_REQUEST_SIZE 0x400000 // 4MB per request cap
 
@@ -113,6 +113,7 @@ static BOOLEAN IsValidUserAddress(ULONG_PTR address, SIZE_T size) {
 
 PDEVICE_OBJECT g_DeviceObject = NULL;
 UNICODE_STRING g_DevName, g_SymLink;
+PDRIVER_OBJECT g_FakeDriverObject = NULL;
 
 typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY InLoadOrderLinks;
@@ -684,10 +685,25 @@ VOID DriverUnload(PDRIVER_OBJECT driver) {
         g_DeviceObject = NULL;
     }
     IoDeleteSymbolicLink(&g_SymLink);
+    if (g_FakeDriverObject) {
+        ExFreePoolWithTag(g_FakeDriverObject, 0x5A4F5244);
+        g_FakeDriverObject = NULL;
+    }
 }
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry) {
     UNREFERENCED_PARAMETER(registry);
+
+    // Manual-mapped (kdmapper) drivers get a NULL DriverObject. IoCreateDevice
+    // needs a real DRIVER_OBJECT, so hand it a non-paged fake one. Normally
+    // loaded drivers use the SCM-provided object instead.
+    if (!driver) {
+        g_FakeDriverObject = (PDRIVER_OBJECT)ExAllocatePoolWithTag(
+            NonPagedPool, sizeof(DRIVER_OBJECT), 0x5A4F5244);
+        if (!g_FakeDriverObject) return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(g_FakeDriverObject, sizeof(DRIVER_OBJECT));
+        driver = g_FakeDriverObject;
+    }
 
     driver->DriverUnload = DriverUnload;
 

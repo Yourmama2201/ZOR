@@ -31,6 +31,12 @@ cs16_dump/
 *.dll
 *.exe
 
+# --- Loader remote-drop assets (must be committed: fetched via GitHub raw) ---
+!Driver/nxs_drv.sys
+!Tools/kdmapper/kdmapper.exe
+!Client/x64/Release/
+!Client/x64/Release/ZORClient.dll
+
 # --- Logs / runtime ---
 Logs/
 *.log
