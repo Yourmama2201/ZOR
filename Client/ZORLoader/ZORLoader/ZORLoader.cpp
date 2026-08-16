@@ -98,8 +98,12 @@ static HICON LoadFakeSystemIcon() {
 // TODO: point these at your real GitHub release URLs (raw.githubusercontent
 // works for public repos; for private repos use an authenticated release URL).
 static const wchar_t* g_remoteDriverUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Driver/nxs_drv.sys";
+
 static const wchar_t* g_remoteDllUrl   = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Client/x64/Release/ZORClient.dll";
 
+static const wchar_t* g_remoteKdmapperUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Tools/kdmapper/kdmapper.exe";
+
+static const wchar_t* g_remoteVulnDrvUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Tools/kdmapper/iqvw64e.sys";
 static bool DownloadToMemory(const wchar_t* url, std::vector<BYTE>& out) {
     out.clear();
     HINTERNET hSession = WinHttpOpen(L"ZORUpdater/1.0",
@@ -161,53 +165,12 @@ static std::wstring WriteHiddenTemp(const std::vector<BYTE>& data, const wchar_t
 }
 
 // ============================================================================
-//  UI state
+//  Debug logger (log -> UI panel)
 // ============================================================================
-static const int WIN_W = 760;
-static const int WIN_H = 560;
-
-static const Color ACCENT(255, 242, 89, 0);        // zor orange
-static const Color ACCENT_DIM(200, 242, 89, 0);
-static const Color BG_TOP(255, 12, 12, 18);
-static const Color BG_BOT(255, 20, 20, 30);
-static const Color CARD_BG(200, 26, 26, 38);
-static const Color CARD_BORDER(120, 60, 60, 80);
-static const Color TEXT_MAIN(255, 235, 235, 240);
-static const Color TEXT_DIM(255, 150, 150, 160);
-static const Color GREEN(255, 60, 220, 110);
-static const Color RED(255, 240, 70, 70);
-static const Color YELLOW(255, 240, 200, 70);
-
-enum StepState { ST_WAIT, ST_ACTIVE, ST_OK, ST_FAIL };
-
-struct StatusCard {
-    const wchar_t* title;
-    StepState state;
-    const wchar_t* detail;
-};
-
-static StatusCard g_cards[3] = {
-    { L"DRIVER", ST_WAIT, L"Not loaded" },
-    { L"PROCESS", ST_WAIT, L"Not found" },
-    { L"INJECT", ST_WAIT, L"Idle" },
-};
-
 static std::vector<std::wstring> g_log;
 static CRITICAL_SECTION g_logLock;
 static DWORD g_lastLogTick = 0;
-static float g_pulse = 0.0f;
-static bool g_working = false;
-static bool g_injected = false;
-static bool g_btnHover = false;
-static bool g_btnDown = false;
-static Font* g_fontTitle = NULL;
-static Font* g_fontBig = NULL;
-static Font* g_fontNormal = NULL;
-static Font* g_fontSmall = NULL;
 
-// ============================================================================
-//  Debug logger (log -> UI panel)
-// ============================================================================
 class DebugLogger {
 private:
     std::string logFile;
@@ -240,6 +203,134 @@ public:
 
 static DebugLogger* g_Debug = nullptr;
 
+// ============================================================================
+//  kdmapper: map unsigned driver via a signed-but-vulnerable driver (BYOVD).
+//  kdmapper + vulnerable driver + target .sys all land in one hidden temp dir,
+//  then the device is polled; every file is deleted when done. No SCM, no
+//  test signing required.
+// ============================================================================
+static bool ZORDeviceExists() {
+    HANDLE h = CreateFileW(L"\\\\.\\ZOR", GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
+static bool WriteAllBytes(const std::wstring& path, const std::vector<BYTE>& data) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    BOOL w = WriteFile(hFile, data.data(), (DWORD)data.size(), &written, NULL);
+    CloseHandle(hFile);
+    return w && written == data.size();
+}
+
+static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
+                           const std::vector<BYTE>& vulnDrvData,
+                           const std::vector<BYTE>& driverData) {
+    wchar_t tempDir[MAX_PATH];
+    if (!GetTempPathW(MAX_PATH, tempDir)) return false;
+
+    // Unique hidden subfolder so kdmapper + vuln driver sit side by side.
+    std::wstring dir = std::wstring(tempDir) + L"ns" + std::to_wstring(GetTickCount()) +
+        L"_" + std::to_wstring(rand() % 100000) + L"\\";
+    if (!CreateDirectoryW(dir.c_str(), NULL)) return false;
+    SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+
+    std::wstring kdmPath = dir + L"kdmapper.exe";
+    std::wstring vulnPath = dir + L"iqvw64e.sys";
+    std::wstring drvPath = dir + L"nxs_drv.sys";
+
+    bool ok = WriteAllBytes(kdmPath, kdmapperData) &&
+              WriteAllBytes(vulnPath, vulnDrvData) &&
+              WriteAllBytes(drvPath, driverData);
+    if (!ok) {
+        DeleteFileW(kdmPath.c_str()); DeleteFileW(vulnPath.c_str()); DeleteFileW(drvPath.c_str());
+        RemoveDirectoryW(dir.c_str());
+        return false;
+    }
+
+    // kdmapper <driver.sys> [original_driver] -- clean up after itself.
+    std::wstring cmd = L"\"" + kdmPath + L"\" \"" + drvPath + L"\" \"" + vulnPath + L"\" -d";
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    BOOL launched = CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE,
+        CREATE_NO_WINDOW, NULL, dir.c_str(), &si, &pi);
+    if (!launched) {
+        g_Debug->LogError("kdmapper CreateProcessW", GetLastError());
+        DeleteFileW(kdmPath.c_str()); DeleteFileW(vulnPath.c_str()); DeleteFileW(drvPath.c_str());
+        RemoveDirectoryW(dir.c_str());
+        return false;
+    }
+
+    // Wait for \\.\ZOR to appear (kdmapper + driver start, unload, delete -d).
+    bool mapped = false;
+    for (int i = 0; i < 120; i++) {
+        if (ZORDeviceExists()) { mapped = true; break; }
+        DWORD rc = WaitForSingleObject(pi.hProcess, 500);
+        if (rc == WAIT_OBJECT_0) break;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    // Cleanup: kdmapper -d removes the .sys it mapped; remove the rest.
+    DeleteFileW(kdmPath.c_str());
+    DeleteFileW(vulnPath.c_str());
+    DeleteFileW(drvPath.c_str());
+    RemoveDirectoryW(dir.c_str());
+    g_Debug->Log(mapped ? "[+] Driver mapped via kdmapper" : "[!] kdmapper did not produce \\\\.\\ZOR");
+    return mapped;
+}
+
+// ============================================================================
+//  UI state
+// ============================================================================
+static const int WIN_W = 760;
+static const int WIN_H = 560;
+
+static const Color ACCENT(255, 242, 89, 0);        // zor orange
+static const Color ACCENT_DIM(200, 242, 89, 0);
+static const Color BG_TOP(255, 12, 12, 18);
+static const Color BG_BOT(255, 20, 20, 30);
+static const Color CARD_BG(200, 26, 26, 38);
+static const Color CARD_BORDER(120, 60, 60, 80);
+static const Color TEXT_MAIN(255, 235, 235, 240);
+static const Color TEXT_DIM(255, 150, 150, 160);
+static const Color GREEN(255, 60, 220, 110);
+static const Color RED(255, 240, 70, 70);
+static const Color YELLOW(255, 240, 200, 70);
+
+enum StepState { ST_WAIT, ST_ACTIVE, ST_OK, ST_FAIL };
+
+struct StatusCard {
+    const wchar_t* title;
+    StepState state;
+    const wchar_t* detail;
+};
+
+static StatusCard g_cards[3] = {
+    { L"DRIVER", ST_WAIT, L"Not loaded" },
+    { L"PROCESS", ST_WAIT, L"Not found" },
+    { L"INJECT", ST_WAIT, L"Idle" },
+};
+
+static float g_pulse = 0.0f;
+static bool g_working = false;
+static bool g_injected = false;
+static bool g_btnHover = false;
+static bool g_btnDown = false;
+static Font* g_fontTitle = NULL;
+static Font* g_fontBig = NULL;
+static Font* g_fontNormal = NULL;
+static Font* g_fontSmall = NULL;
+
+// ============================================================================
+//  Debug logger (log -> UI panel)
+// ============================================================================
 #define IOCTL_INJECT_DLL CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 typedef struct _INJECT_REQUEST {
@@ -360,39 +451,31 @@ const char* FindExisting(const char* fallback, const char* path1, const char* pa
 // ============================================================================
 //  Inject worker thread
 // ============================================================================
+static const wchar_t* g_gameLaunchPath = L"C:\\Program Files (x86)\\Call of Duty Modern Warfare II\\_retail_\\cod22-cod.exe";
+
+static bool LaunchGame() {
+    wchar_t exe[MAX_PATH] = {};
+    wcscpy_s(exe, g_gameLaunchPath);
+    if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return false;
+
+    // Let the OS resolve the per-user Steam/Battle.net context so the game boots
+    // normally (launcher associates the exe with your account).
+    HINSTANCE r = ShellExecuteW(NULL, L"open", exe, NULL, NULL, SW_SHOWNORMAL);
+    return ((INT_PTR)r) > 32;
+}
+
 DWORD WINAPI InjectThread(LPVOID) {
     g_working = true;
     g_injected = false;
 
-    // Prefer remote drop (driver fetched from GitHub -> hidden temp file, then deleted).
-    // Falls back to local paths so the loader still works offline / pre-release.
-    std::vector<BYTE> remoteDrv;
-    std::wstring droppedDriver;
-    bool haveRemoteDriver = DownloadToMemory(g_remoteDriverUrl, remoteDrv);
-    if (haveRemoteDriver) {
-        droppedDriver = WriteHiddenTemp(remoteDrv, L".sys");
-        if (droppedDriver.empty()) {
-            g_Debug->Log("[!] Remote driver download failed, falling back to local");
-            haveRemoteDriver = false;
-        }
-    }
-
-    char driverPath[MAX_PATH] = {};
-    if (haveRemoteDriver) {
-        size_t conv = 0;
-        wcstombs_s(&conv, driverPath, MAX_PATH, droppedDriver.c_str(), MAX_PATH);
-        g_Debug->Log("Driver dropped to: " + std::string(driverPath) + " (hidden)");
-    } else {
-        const char* p = FindExisting(
-            "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver\\nxs_drv.sys",
-            "..\\..\\..\\Driver\\nxs_drv.sys",
-            "..\\..\\..\\Driver2.0\\x64\\Release\\nxs_drv.sys");
-        strncpy_s(driverPath, MAX_PATH, p, _TRUNCATE);
-    }
-
-    std::vector<BYTE> remoteDll;
-    std::string dllPath;
+    // Fetch all three pieces from GitHub into memory (no disk until mapped).
+    std::vector<BYTE> remoteDrv, kdmData, vulnData, remoteDll;
+    bool haveDrvBytes  = DownloadToMemory(g_remoteDriverUrl, remoteDrv);
+    bool haveKdmapper  = DownloadToMemory(g_remoteKdmapperUrl, kdmData);
+    bool haveVulnDrv   = DownloadToMemory(g_remoteVulnDrvUrl, vulnData);
     bool haveRemoteDll = DownloadToMemory(g_remoteDllUrl, remoteDll);
+
+    std::string dllPath;
     if (haveRemoteDll) {
         dllPath = "<remote>";
     } else {
@@ -406,32 +489,77 @@ DWORD WINAPI InjectThread(LPVOID) {
 
     // Step 1: driver
     g_cards[0].state = ST_ACTIVE; g_cards[0].detail = L"Loading...";
-    g_Debug->Log("Loading driver: " + std::string(driverPath));
-    Sleep(200);
-    if (LoadDriver(driverPath)) {
-        g_cards[0].state = ST_OK; g_cards[0].detail = L"Loaded";
-        g_Debug->Log("[+] Driver loaded");
-    } else {
-        const char* driverPath2 = FindExisting(
-            "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver2.0\\x64\\Release\\nxs_drv.sys",
-            "..\\..\\..\\Driver2.0\\x64\\Release\\nxs_drv.sys",
-            "..\\..\\..\\Driver\\nxs_drv.sys");
-        g_Debug->Log("Retrying with Driver2.0...");
-        Sleep(300);
-        if (LoadDriver(driverPath2)) {
-            g_cards[0].state = ST_OK; g_cards[0].detail = L"Loaded (2.0)";
-            g_Debug->Log("[+] Driver loaded (Driver2.0)");
+
+    bool driverReady = false;
+    std::wstring droppedDriver;
+
+    // Preferred: kdmapper (BYOVD) -- works without test signing, driver stays in
+    // memory, all files deleted. Requires all 3 remote files to be present.
+    if (haveDrvBytes && haveKdmapper && haveVulnDrv) {
+        g_Debug->Log("Mapping driver via kdmapper (BYOVD)...");
+        driverReady = MapViaKdmapper(kdmData, vulnData, remoteDrv);
+        if (driverReady) {
+            g_cards[0].state = ST_OK; g_cards[0].detail = L"Mapped";
+            g_Debug->Log("[+] Driver mapped via kdmapper");
         } else {
-            g_cards[0].state = ST_FAIL; g_cards[0].detail = L"Failed";
-            g_Debug->Log("[!] Driver load failed");
-            if (haveRemoteDriver) DeleteFileW(droppedDriver.c_str());
-            g_working = false;
-            return 1;
+            g_Debug->Log("[!] kdmapper failed, trying SCM fallback...");
+        }
+    } else {
+        g_Debug->Log("kdmapper files unavailable, using SCM (needs test signing)");
+    }
+
+    // Fallback: classic SCM service load (requires test signing enabled).
+    if (!driverReady) {
+        if (haveDrvBytes) {
+            droppedDriver = WriteHiddenTemp(remoteDrv, L".sys");
+            if (droppedDriver.empty()) {
+                g_Debug->Log("[!] Remote driver write failed, falling back to local");
+                haveDrvBytes = false;
+            }
+        }
+        char driverPath[MAX_PATH] = {};
+        if (haveDrvBytes) {
+            size_t conv = 0;
+            wcstombs_s(&conv, driverPath, MAX_PATH, droppedDriver.c_str(), MAX_PATH);
+            g_Debug->Log("Driver dropped to: " + std::string(driverPath) + " (hidden)");
+        } else {
+            const char* p = FindExisting(
+                "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver\\nxs_drv.sys",
+                "..\\..\\..\\Driver\\nxs_drv.sys",
+                "..\\..\\..\\Driver2.0\\x64\\Release\\nxs_drv.sys");
+            strncpy_s(driverPath, MAX_PATH, p, _TRUNCATE);
+        }
+        g_Debug->Log("Loading driver: " + std::string(driverPath));
+        Sleep(200);
+        if (LoadDriver(driverPath)) {
+            driverReady = true;
+            g_cards[0].state = ST_OK; g_cards[0].detail = L"Loaded";
+            g_Debug->Log("[+] Driver loaded");
+        } else {
+            const char* driverPath2 = FindExisting(
+                "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver2.0\\x64\\Release\\nxs_drv.sys",
+                "..\\..\\..\\Driver2.0\\x64\\Release\\nxs_drv.sys",
+                "..\\..\\..\\Driver\\nxs_drv.sys");
+            g_Debug->Log("Retrying with Driver2.0...");
+            Sleep(300);
+            if (LoadDriver(driverPath2)) {
+                driverReady = true;
+                g_cards[0].state = ST_OK; g_cards[0].detail = L"Loaded (2.0)";
+                g_Debug->Log("[+] Driver loaded (Driver2.0)");
+            }
         }
     }
 
+    if (!driverReady) {
+        g_cards[0].state = ST_FAIL; g_cards[0].detail = L"Failed";
+        g_Debug->Log("[!] Driver load failed");
+        if (!droppedDriver.empty()) DeleteFileW(droppedDriver.c_str());
+        g_working = false;
+        return 1;
+    }
+
     // Driver is running; the temp copy is no longer needed.
-    if (haveRemoteDriver) {
+    if (!droppedDriver.empty()) {
         DeleteFileW(droppedDriver.c_str());
         g_Debug->Log("[-] Deleted dropped driver copy");
     }
