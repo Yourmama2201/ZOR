@@ -1,0 +1,21 @@
+[+] Log file: cs16_dump_Thu Jul 30 082925 2026.txt
+[+] Module base: 0x6160384
+[+] === CS 1.6 GOLDSRC OFFSET CALCULATION ===
+
+=== RESULTS ===
+Module Base: 0x6160384
+EntityList: 0x11475476
+LocalPlayer: 0x11475472
+Health Offset: 0x252
+Origin Offset: 0x308
+ViewAngles: 0x11213876
+Team Offset: 0x112
+Name Offset: 0x932
+WeaponID Offset: 0x504
+Ammo Offset: 0x4544
+Crosshair: 0x6169712
+Scoreboard: 0x11475476
+Radar: 0x11475476
+[+] Offsets calculated successfully!
+[+] === GENERATING CS 1.6 OFFSET HEADER ===
+[+] Generated: cs16_offsets.hpp

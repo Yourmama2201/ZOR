@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="ZORLoader/ZORLoader.vcxproj" Id="ebc34a8b-efc2-47dd-bc0c-05b18b10c01c" />
+</Solution>

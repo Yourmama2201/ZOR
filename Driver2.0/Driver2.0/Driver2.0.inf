@@ -1,0 +1,62 @@
+;
+; ZOR Kernel Driver INF
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = nxs_drv.cat
+DriverVer = 07/26/2026,1.0.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+nxs_drv.sys = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%Driver2.0.DeviceDesc% = nxs_dev, Root\ZOR
+
+[nxs_dev.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+nxs_drv.sys
+
+;-------------- Service installation
+[nxs_dev.NT.Services]
+AddService = ZOR, %SPSVCINST_ASSOCSERVICE%, nxs_svc_Inst
+
+; -------------- Driver install sections
+[nxs_svc_Inst]
+DisplayName    = %Driver2.0.SVCDESC%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\nxs_drv.sys
+
+[nxs_dev.NT.Wdf]
+KmdfService = ZOR, nxs_wdf
+
+[nxs_wdf]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "Intel Corporation"
+DiskName = "ZOR Driver Installation Disk"
+Driver2.0.DeviceDesc = "Intel Management Engine Interface"
+Driver2.0.SVCDESC = "Intel Management Engine Kernel Driver"

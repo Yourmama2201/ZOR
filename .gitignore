@@ -1,0 +1,47 @@
+# --- Build outputs ---
+.vs/
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.idb
+*.ipdb
+*.iobj
+*.tlog
+*.lastbuildstate
+
+# --- Game dumps / offsets ---
+Tools/OffsetDumper/*.bin
+Tools/OffsetDumper/dump_*.txt
+Tools/OffsetDumper/dumper_*.txt
+Tools/OffsetDumper/scanner.log
+Tools/OffsetDumper/offsets_generated.hpp
+Tools/OffsetDumper/extracted/
+cs16_dump/
+
+# --- Archives / binaries ---
+*.zip
+*.rar
+*.7z
+*.sys
+*.dll
+*.exe
+
+# --- Logs / runtime ---
+Logs/
+*.log
+
+# --- OS cruft ---
+Thumbs.db
+desktop.ini
+System Volume Information/
+
+# --- External tooling (keep source, ignore build) ---
+External/
+Injector/
+StealthInjector/
+VMProtect/

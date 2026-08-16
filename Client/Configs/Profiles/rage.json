@@ -1,0 +1,6 @@
+{
+    "profile": "Rage",
+    "aimbot": {"mode": "Rage", "smoothness": 0.01, "fov": 180},
+    "esp": {"box": true, "skeleton": true, "health": true, "name": true},
+    "filters": {"players": true, "ai": true, "loot": false}
+}

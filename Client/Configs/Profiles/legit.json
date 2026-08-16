@@ -1,0 +1,6 @@
+{
+    "profile": "Legit",
+    "aimbot": {"mode": "Legit", "smoothness": 0.15, "fov": 5},
+    "esp": {"box": true, "health": true, "name": true},
+    "filters": {"players": true, "ai": false, "loot": true}
+}
