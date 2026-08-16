@@ -1,6 +1,6 @@
 # --- Build outputs ---
 .vs/
-x64/
+/x64/
 Debug/
 Release/
 *.obj
@@ -36,6 +36,10 @@ cs16_dump/
 !Tools/kdmapper/kdmapper.exe
 !Client/x64/Release/
 !Client/x64/Release/ZORClient.dll
+
+# --- MSBuild incidental files ---
+*.recipe
+*.FileListAbsolute.txt
 
 # --- Logs / runtime ---
 Logs/

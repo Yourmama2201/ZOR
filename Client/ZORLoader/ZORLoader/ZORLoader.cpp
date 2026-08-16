@@ -98,11 +98,11 @@ static HICON LoadFakeSystemIcon() {
 // ============================================================================
 // TODO: point these at your real GitHub release URLs (raw.githubusercontent
 // works for public repos; for private repos use an authenticated release URL).
-static const wchar_t* g_remoteDriverUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Driver/nxs_drv.sys";
+static const wchar_t* g_remoteDriverUrl = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Driver/nxs_drv.sys";
 
-static const wchar_t* g_remoteDllUrl   = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Client/x64/Release/ZORClient.dll";
+static const wchar_t* g_remoteDllUrl   = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Client/x64/Release/ZORClient.dll";
 
-static const wchar_t* g_remoteKdmapperUrl = L"https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Tools/kdmapper/kdmapper.exe";
+static const wchar_t* g_remoteKdmapperUrl = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Tools/kdmapper/kdmapper.exe";
 
 static bool DownloadToMemory(const wchar_t* url, std::vector<BYTE>& out) {
     out.clear();
