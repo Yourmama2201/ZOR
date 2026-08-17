@@ -401,6 +401,9 @@ static bool g_copyHover = false;
 static bool g_copyDown = false;
 static bool g_closeHover = false;
 static bool g_closeDown = false;
+static bool g_helpHover = false;
+static bool g_helpDown = false;
+static bool g_showHelp = false;
 static const int TITLEBAR_H = 34;
 static Font* g_fontTitle = NULL;
 static Font* g_fontBig = NULL;
@@ -1234,6 +1237,15 @@ static void DrawScene(HWND hwnd) {
         GText(g, L"COPY", *g_fontMono, copyBtn, g_copyHover ? Color(255, 255, 255, 255) : TEXT_DIM,
             StringAlignmentCenter, StringAlignmentCenter);
     }
+    // HELP button (to the left of COPY)
+    {
+        RectF helpBtn(logBox.GetRight() - 158.0f, logY + 5.0f, 64.0f, 20.0f);
+        FillRoundRect(g, helpBtn, 6.0f, g_helpDown ? Color(220, 0, 229, 255) :
+            (g_helpHover ? Color(160, 40, 90, 200) : Color(120, 24, 40, 90)));
+        StrokeRoundRect(g, helpBtn, 6.0f, g_helpHover ? ACCENT : Color(100, 0, 160, 200), 1.0f);
+        GText(g, L"HELP", *g_fontMono, helpBtn, g_helpHover ? Color(255, 255, 255, 255) : TEXT_DIM,
+            StringAlignmentCenter, StringAlignmentCenter);
+    }
 
     // log lines (scrolled to bottom)
     EnterCriticalSection(&g_logLock);
@@ -1257,6 +1269,62 @@ static void DrawScene(HWND hwnd) {
     GText(g, L"ZOR // system v8 // eddie", *g_fontSmall, RectF(28, (float)(H - 22), 220, 16), Color(130, 0, 160, 200));
     GText(g, L"BYOVD READY", *g_fontMono, RectF((float)(W - 150), (float)(H - 22), 130, 16),
         Color(130, 0, 160, 200), StringAlignmentFar);
+
+    // ---- help page overlay ----
+    if (g_showHelp) {
+        SolidBrush dim( Color(200, 0, 0, 0) );
+        g.FillRectangle(&dim, (REAL)0, (REAL)0, (REAL)W, (REAL)H);
+
+        RectF page(70, 46, (float)(W - 140), (float)(H - 92));
+        FillRoundRect(g, page, 14.0f, Color(245, 10, 10, 26));
+        StrokeRoundRect(g, page, 14.0f, CARD_BORDER, 1.4f);
+
+        GText(g, L"HOW TO INJECT", *g_fontBig, RectF(page.X + 24, page.Y + 16, page.Width - 48, 30), ACCENT);
+        GText(g, L"ESC to close", *g_fontSmall, RectF(page.GetRight() - 120, page.Y + 20, 96, 16), TEXT_DIM,
+            StringAlignmentFar);
+
+        // Minimal system requirements
+        GText(g, L"GRAPHICS SETTINGS (REQUIRED)", *g_fontNormal, RectF(page.X + 24, page.Y + 60, page.Width - 48, 18), NEON_PINK);
+        const wchar_t* gfx[] = {
+            L"  [1]  Game must run in FULLSCREEN or BORDERLESS - NOT windowed",
+            L"  [2]  Rendering: 1280x720 up to 2560x1440 (higher = more VRAM)",
+            L"  [3]  VRAM usage should stay under ~70% in the game menu",
+            L"  [4]  Turn off DX12 'Renderer Worker Count' overrides",
+            L"  [5]  FPS cap 60-165 recommended for a stable overlay",
+            L"  [6]  Close Discord overlay / OBS / RTSS (they hook the same APIs)",
+        };
+        for (int i = 0; i < 6; i++) {
+            GText(g, gfx[i], *g_fontSmall, RectF(page.X + 24, page.Y + 84 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+        }
+
+        // Steps
+        GText(g, L"STEPS", *g_fontNormal, RectF(page.X + 24, page.Y + 84 + 6 * 20 + 18, page.Width - 48, 18), NEON_PINK);
+        const wchar_t* steps[] = {
+            L"  1.  Boot the game into a DMZ lobby (or any in-game menu)",
+            L"  2.  Select your platform: BATTLE / STEAM / XBOX",
+            L"  3.  Wait until the game is fully in the lobby, then press INJECT",
+            L"  4.  DRIVER -> PROCESS -> INJECT must all turn green",
+            L"  5.  Once INJECTED, alt-tab to the overlay (default key: END)",
+        };
+        for (int i = 0; i < 5; i++) {
+            GText(g, steps[i], *g_fontSmall, RectF(page.X + 24, page.Y + 108 + 6 * 20 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+        }
+
+        // Troubleshooting
+        GText(g, L"IF SOMETHING FAILS", *g_fontNormal, RectF(page.X + 24, page.Y + 108 + 11 * 20 + 18, page.Width - 48, 18), NEON_PINK);
+        const wchar_t* fix[] = {
+            L"  PROCESS red  ->  the game is not running. Launch it first, retry.",
+            L"  DRIVER red   ->  hit 'COPY' and send the log; a driver update may be pending.",
+            L"  INJECT red   ->  press COPY and send the log. Usually fixed by restarting the game.",
+            L"  No overlay   ->  press END in-game, or restart the game and re-inject.",
+        };
+        for (int i = 0; i < 4; i++) {
+            GText(g, fix[i], *g_fontSmall, RectF(page.X + 24, page.Y + 132 + 11 * 20 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+        }
+
+        GText(g, L"ZOR v8.0 // built by eddie // if it breaks, COPY the log and send it",
+            *g_fontSmall, RectF(page.X + 24, page.GetBottom() - 26, page.Width - 48, 16), Color(130, 0, 160, 200));
+    }
 
     // blit
     Graphics mb(memDC);
@@ -1304,6 +1372,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             bool cHover = (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
                            pt.y >= logY + 5 && pt.y <= logY + 25);
             if (cHover != g_copyHover) { g_copyHover = cHover; InvalidateRect(hwnd, NULL, FALSE); }
+            // HELP button: to the left of COPY (right - 150 .. right - 98)
+            bool hHover = (pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+                           pt.y >= logY + 5 && pt.y <= logY + 25);
+            if (hHover != g_helpHover) { g_helpHover = hHover; InvalidateRect(hwnd, NULL, FALSE); }
             return 0;
         }
         case WM_LBUTTONDOWN: {
@@ -1351,6 +1423,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_copyDown = true;
                 InvalidateRect(hwnd, NULL, FALSE);
             }
+            // HELP button toggles the help page
+            if (pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+                pt.y >= logY + 5 && pt.y <= logY + 25) {
+                g_helpDown = true;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
             return 0;
         }
         case WM_LBUTTONUP: {
@@ -1359,10 +1437,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             float logY = 420.0f;
             bool wasCopyDown = g_copyDown;
             bool wasCloseDown = g_closeDown;
+            bool wasHelpDown = g_helpDown;
             g_copyDown = false;
             g_btnDown = false;
             g_platDown = -1;
             g_closeDown = false;
+            g_helpDown = false;
             if (wasCloseDown && pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28) {
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
             }
@@ -1370,12 +1450,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 pt.y >= logY + 5 && pt.y <= logY + 25) {
                 CopyConsoleToClipboard(hwnd);
             }
+            if (wasHelpDown && pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+                pt.y >= logY + 5 && pt.y <= logY + 25) {
+                g_showHelp = !g_showHelp;
+            }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
         case WM_KEYDOWN: {
             if (wp == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                 CopyConsoleToClipboard(hwnd);
+                return 0;
+            }
+            if (wp == VK_ESCAPE && g_showHelp) {
+                g_showHelp = false;
+                InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
             break;
