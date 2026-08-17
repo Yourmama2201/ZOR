@@ -147,7 +147,15 @@ private:
     std::string logFile;
 public:
     DebugLogger() {
-        logFile = std::string(g_fakeName.begin(), g_fakeName.end()) + ".log";
+        // Log to a fixed path next to the exe so every run is captured
+        // regardless of the working directory the user launched from.
+        wchar_t exePath[MAX_PATH] = {};
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        std::wstring dir = exePath;
+        size_t slash = dir.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) dir = dir.substr(0, slash + 1);
+        std::wstring wlog = dir + L"ZORLoader_runtime.log";
+        logFile.assign(wlog.begin(), wlog.end());
         std::ofstream ofs(logFile, std::ios::trunc);
         ofs << "ZOR LOADER LOG\n";
         ofs.close();
@@ -797,8 +805,29 @@ DWORD WINAPI InjectThread(LPVOID) {
         for (auto& name : altNames) { pid = FindProcess(name); if (pid) break; }
     }
     if (!pid) {
+        // Diagnostic: list what IS running so we can see the mismatch.
         g_cards[1].state = ST_FAIL; g_cards[1].detail = L"Not found";
         g_Debug->Log("[!] Game process not found");
+        g_Debug->Log("[!] Checked: cod22-cod.exe, cod.exe, codhq-cod.exe, ModernWarfare.exe, mw22-cod.exe");
+        g_Debug->Log("[!] Running processes:");
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W pe = { sizeof(pe) };
+            if (Process32FirstW(snap, &pe)) {
+                do {
+                    std::wstring n(pe.szExeFile);
+                    if (n.find(L"cod") != std::wstring::npos ||
+                        n.find(L"MW") != std::wstring::npos ||
+                        n.find(L"Battle") != std::wstring::npos ||
+                        n.find(L"Steam") != std::wstring::npos ||
+                        n.find(L"activision") != std::wstring::npos) {
+                        std::string a(n.begin(), n.end());
+                        g_Debug->Log("  RUNNING: " + a + " (PID " + std::to_string(pe.th32ProcessID) + ")");
+                    }
+                } while (Process32NextW(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
         g_working = false;
         return 1;
     }
