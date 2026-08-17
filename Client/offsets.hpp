@@ -8,10 +8,10 @@ namespace Offsets {
     constexpr uintptr_t CMD_ARRAY = 0xCD3D810;
     constexpr uintptr_t ACTIVE_STATE = 0xF27D528;
     constexpr uintptr_t BONE_BASE = 0xCB97E48;
-    constexpr uintptr_t CAMERA_MATRIX = 0xCD1031C; // view matrix, static (CAMERA_BASE chain is dead/null)
+    constexpr uintptr_t CAMERA_MATRIX = 0xCD1031C; // view matrix, static
     constexpr uintptr_t CAMERA_MATRIX_ALT = 0xCD24ADC;
     constexpr uintptr_t CAMERA_POS = 0x218; // camera position offset (in camera struct)
-    constexpr uintptr_t CAMERA_BASE = 0x122B1380;  // DEAD (null) as of 08/2026 update
+    constexpr uintptr_t CAMERA_BASE = 0x122B1380;  // confirmed working (null only in menu dump)
     constexpr uintptr_t DISTRIBUTE = 0xA88DD10;
     constexpr uintptr_t VISIBLE_BIT = 0x8700;
     constexpr uintptr_t VIEW_ANGLES = 0x12C00;

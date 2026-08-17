@@ -89,7 +89,7 @@ static void SelfRenameAndRelaunch() {
 static HICON LoadFakeSystemIcon() {
     // Pull a real system icon from shell32.dll so it looks like a Windows utility.
     HICON hIcon = ExtractIconW(GetModuleHandleW(NULL), L"shell32.dll", 70);
-    if (!hIcon) hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    if (!hIcon) hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
     return hIcon;
 }
 
@@ -181,6 +181,8 @@ public:
 };
 
 static DebugLogger* g_Debug = nullptr;
+static bool g_downloadActive = false;
+static std::wstring g_downloadLabel;
 
 // ============================================================================
 //  GitHub raw download: fetches the driver / kdmapper / client DLL from the
@@ -240,11 +242,16 @@ static bool AcquireFile(const char* localPath, const char* repoPath, std::vector
         return true;
     }
     g_Debug->Log(std::string("Local ") + label + " not found, downloading from GitHub...");
+    g_downloadActive = true;
+    g_downloadLabel = std::wstring(label, label + strlen(label));
+    g_Debug->Log("[!] DOWNLOADING " + std::string(label) + " from GitHub...");
     if (DownloadFromGitHub(repoPath, out)) {
+        g_downloadActive = false;
         g_Debug->Log(std::string("[+] Downloaded ") + label + " from GitHub (" +
             std::to_string(out.size()) + " bytes)");
         return true;
     }
+    g_downloadActive = false;
     g_Debug->LogError(std::string(label) + " fetch failed", 0);
     return false;
 }
@@ -313,8 +320,23 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
     if (!CreateDirectoryW(dir.c_str(), NULL)) return false;
     SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
 
-    std::wstring kdmPath = dir + L"kdmapper.exe";
-    std::wstring drvPath = dir + L"nxs_drv.sys";
+    // Disguised filenames so the temp drop looks like a benign Windows helper
+    // rather than "kdmapper.exe" / "nxs_drv.sys". Names are randomized each run.
+    static const wchar_t* fakeExeNames[] = {
+        L"WindowsUpdateHelper.exe", L"RuntimeBrokerSvc.exe", L"SecurityHealthUtil.exe",
+        L"BackgroundTaskHost.exe", L"CompatTelRunner.exe", L"SearchIndexerW.exe",
+        L"SystemEventsBroker.exe", L"DnsCacheService.exe"
+    };
+    static const wchar_t* fakeSysNames[] = {
+        L"wdicfs.sys", L"tcpipf.sys", L"ndishlp.sys", L"volsnapx.sys",
+        L"clfsmgmts.sys", L"fvevol.sys", L"cnga.sys", L"clipsp.sys"
+    };
+    std::mt19937 rng((unsigned)GetTickCount() ^ ((unsigned)GetCurrentProcessId() << 16));
+    std::wstring kdmName = fakeExeNames[rng() % 8];
+    std::wstring drvName = fakeSysNames[rng() % 8];
+
+    std::wstring kdmPath = dir + kdmName;
+    std::wstring drvPath = dir + drvName;
 
     bool ok = WriteAllBytes(kdmPath, kdmapperData) &&
               WriteAllBytes(drvPath, driverData);
@@ -323,6 +345,9 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
         RemoveDirectoryW(dir.c_str());
         return false;
     }
+
+    g_Debug->Log("[+] Dropped mapped files as " + std::string(kdmName.begin(), kdmName.end()) +
+        " / " + std::string(drvName.begin(), drvName.end()) + " (hidden)");
 
     // Keep the driver mapped (no --free) so \\.\ZOR stays resident for inject.
     // --copy-header gives a valid driver header which keeps our own PE checks happy.
@@ -1110,6 +1135,18 @@ static void DrawScene(HWND hwnd) {
     // ---- header ----
     DrawEmblem(g, 44.0f, 78.0f, 26.0f, ACCENT, Color(150, 0, 60, 140), Color(150, 120, 0, 255), L'Z');
 
+    // ---- download alert banner ----
+    if (g_downloadActive) {
+        RectF dbar(28, 42, (float)(W - 56), 30.0f);
+        FillRoundRect(g, dbar, 10.0f, Color(235, 30, 40, 12));
+        StrokeRoundRect(g, dbar, 10.0f, NEON_PINK, 1.2f);
+        SolidBrush dlbr(Color(255, 255, 200, 90));
+        g.FillEllipse(&dlbr, dbar.X + 10.0f, dbar.Y + dbar.Height / 2.0f - 4.0f, 8.0f, 8.0f);
+        std::wstring dmsg = L"DOWNLOADING " + g_downloadLabel + L" from GitHub...";
+        GText(g, dmsg.c_str(), *g_fontNormal, RectF(dbar.X + 26, dbar.Y, dbar.Width - 40, dbar.Height),
+            NEON_PINK, StringAlignmentNear, StringAlignmentCenter);
+    }
+
     RectF titleR(78, 52, 200, 40);
     // glow behind title
     DrawGlow(g, 120, 74, 70, Color(70, 0, 229, 255));
@@ -1300,7 +1337,9 @@ static void DrawScene(HWND hwnd) {
             StringAlignmentFar);
 
         // Minimal system requirements
-        GText(g, L"GRAPHICS SETTINGS (REQUIRED)", *g_fontNormal, RectF(page.X + 24, page.Y + 60, page.Width - 48, 18), NEON_PINK);
+        float hy = page.Y + 56;
+        GText(g, L"GRAPHICS SETTINGS (REQUIRED)", *g_fontNormal, RectF(page.X + 24, hy, page.Width - 48, 18), NEON_PINK);
+        hy += 24;
         const wchar_t* gfx[] = {
             L"  [1]  Game must run in FULLSCREEN or BORDERLESS - NOT windowed",
             L"  [2]  Rendering: 1280x720 up to 2560x1440 (higher = more VRAM)",
@@ -1310,11 +1349,13 @@ static void DrawScene(HWND hwnd) {
             L"  [6]  Close Discord overlay / OBS / RTSS (they hook the same APIs)",
         };
         for (int i = 0; i < 6; i++) {
-            GText(g, gfx[i], *g_fontSmall, RectF(page.X + 24, page.Y + 84 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+            GText(g, gfx[i], *g_fontSmall, RectF(page.X + 24, hy + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
         }
+        hy += 6 * 20 + 16;
 
         // Steps
-        GText(g, L"STEPS", *g_fontNormal, RectF(page.X + 24, page.Y + 84 + 6 * 20 + 18, page.Width - 48, 18), NEON_PINK);
+        GText(g, L"STEPS", *g_fontNormal, RectF(page.X + 24, hy, page.Width - 48, 18), NEON_PINK);
+        hy += 24;
         const wchar_t* steps[] = {
             L"  1.  Boot the game into a DMZ lobby (or any in-game menu)",
             L"  2.  Select your platform: BATTLE / STEAM / XBOX",
@@ -1323,11 +1364,13 @@ static void DrawScene(HWND hwnd) {
             L"  5.  Once INJECTED, alt-tab to the overlay (default key: END)",
         };
         for (int i = 0; i < 5; i++) {
-            GText(g, steps[i], *g_fontSmall, RectF(page.X + 24, page.Y + 108 + 6 * 20 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+            GText(g, steps[i], *g_fontSmall, RectF(page.X + 24, hy + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
         }
+        hy += 5 * 20 + 16;
 
         // Troubleshooting
-        GText(g, L"IF SOMETHING FAILS", *g_fontNormal, RectF(page.X + 24, page.Y + 108 + 11 * 20 + 18, page.Width - 48, 18), NEON_PINK);
+        GText(g, L"IF SOMETHING FAILS", *g_fontNormal, RectF(page.X + 24, hy, page.Width - 48, 18), NEON_PINK);
+        hy += 24;
         const wchar_t* fix[] = {
             L"  PROCESS red  ->  the game is not running. Launch it first, retry.",
             L"  DRIVER red   ->  hit 'COPY' and send the log; a driver update may be pending.",
@@ -1335,7 +1378,7 @@ static void DrawScene(HWND hwnd) {
             L"  No overlay   ->  press END in-game, or restart the game and re-inject.",
         };
         for (int i = 0; i < 4; i++) {
-            GText(g, fix[i], *g_fontSmall, RectF(page.X + 24, page.Y + 132 + 11 * 20 + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
+            GText(g, fix[i], *g_fontSmall, RectF(page.X + 24, hy + (REAL)i * 20, page.Width - 48, 18), TEXT_MAIN);
         }
 
         GText(g, L"ZOR v8.0 // built by eddie // if it breaks, COPY the log and send it",
@@ -1383,13 +1426,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // close (X) button: right-34 .. right-8, y 6..28
             bool clHover = (pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28);
             if (clHover != g_closeHover) { g_closeHover = clHover; InvalidateRect(hwnd, NULL, FALSE); }
-            // COPY button: (right - 58 .. right - 22) x (logY+5 .. logY+25)
+            // COPY button: drawn at (right-114 .. right-50) x (logY+5 .. logY+25)
             float logY = 420.0f;
-            bool cHover = (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+            bool cHover = (pt.x >= rc.right - 114 && pt.x <= rc.right - 50 &&
                            pt.y >= logY + 5 && pt.y <= logY + 25);
             if (cHover != g_copyHover) { g_copyHover = cHover; InvalidateRect(hwnd, NULL, FALSE); }
-            // HELP button: to the left of COPY (right - 150 .. right - 98)
-            bool hHover = (pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+            // HELP button: drawn to the left of COPY (right-186 .. right-122)
+            bool hHover = (pt.x >= rc.right - 186 && pt.x <= rc.right - 122 &&
                            pt.y >= logY + 5 && pt.y <= logY + 25);
             if (hHover != g_helpHover) { g_helpHover = hHover; InvalidateRect(hwnd, NULL, FALSE); }
             return 0;
@@ -1434,13 +1477,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             float logY = 420.0f;
-            if (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+            if (pt.x >= rc.right - 114 && pt.x <= rc.right - 50 &&
                 pt.y >= logY + 5 && pt.y <= logY + 25) {
                 g_copyDown = true;
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             // HELP button toggles the help page
-            if (pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+            if (pt.x >= rc.right - 186 && pt.x <= rc.right - 122 &&
                 pt.y >= logY + 5 && pt.y <= logY + 25) {
                 g_helpDown = true;
                 InvalidateRect(hwnd, NULL, FALSE);
@@ -1462,11 +1505,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wasCloseDown && pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28) {
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
             }
-            if (wasCopyDown && pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
+            if (wasCopyDown && pt.x >= rc.right - 114 && pt.x <= rc.right - 50 &&
                 pt.y >= logY + 5 && pt.y <= logY + 25) {
                 CopyConsoleToClipboard(hwnd);
             }
-            if (wasHelpDown && pt.x >= rc.right - 150 && pt.x <= rc.right - 98 &&
+            if (wasHelpDown && pt.x >= rc.right - 186 && pt.x <= rc.right - 122 &&
                 pt.y >= logY + 5 && pt.y <= logY + 25) {
                 g_showHelp = !g_showHelp;
             }
