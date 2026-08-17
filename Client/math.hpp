@@ -145,6 +145,14 @@ public:
         );
     }
 
+    // Humanized smoothing: correction speed scales with how far we are from the
+    // target angle. Large errors correct fast (feels like a fast flick), small
+    // errors ease in slowly (avoids robotic micro-snaps on the exact pixel).
+    static Vec3 HumanSmooth(const Vec3& current, const Vec3& target, float base, float remainingFOV) {
+        float speed = base + (1.0f - base) * std::clamp(remainingFOV / 30.0f, 0.0f, 1.0f);
+        return SmoothAngle(current, target, std::clamp(speed, 0.0f, 1.0f));
+    }
+
     static Vec2 WorldToScreen(const Vec3& worldPos, const Matrix4x4& viewMatrix, int width, int height) {
         Vec3 screenPos = viewMatrix.Transform(worldPos);
         if (screenPos.z < 0.001f) return Vec2(-9999, -9999);

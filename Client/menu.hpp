@@ -59,6 +59,7 @@ private:
     bool* aimbotEnabled, *silentAimEnabled, *triggerbotEnabled, *triggerAdvanced;
     bool* headshotOnly, *wallBang; float *aimFOV, *aimSmooth; int *targetBone;
     float *aimMaxDistance;
+    float *aimBulletSpeed; bool *bulletDrop, *lowestHealthFirst, *humanSmooth;
     float *silentFOV; bool *silentHeadshot; int *triggerDelay;
     bool *triggerAutoShoot, *drawFovCircle, *bulletTracking;
     int *aimMode;
@@ -159,6 +160,10 @@ private:
                 ImGui::SliderFloat("FOV", aimFOV, 0.5f, 90.0f, "%.1f");
                 ImGui::SliderFloat("Smoothness", aimSmooth, 0.01f, 0.50f, "%.3f");
                 ImGui::SliderFloat("Max Distance (m)", aimMaxDistance, 10.0f, 5000.0f, "%.0f");
+                ImGui::SliderFloat("Bullet Speed", aimBulletSpeed, 300.0f, 1500.0f, "%.0f");
+                TL("Bullet Drop", bulletDrop, "Aim above target so the bullet arcs down onto them (projectile gravity)");
+                TL("Humanized Smooth", humanSmooth, "Fast flick when far off, gentle ease-in near target (looks human)");
+                TL("Lowest Health First", lowestHealthFirst, "Prefer the weakest target in range to finish kills fast");
                 TL("Headshot Only", headshotOnly, "Only lock onto the head bone"); T("Wall Bang", wallBang, "Allow targets through walls");
                 ImGui::Combo("Target Mode", aimMode, "All\0Players Only\0AI Only\0Boss Priority\0");
                 if (!*headshotOnly) {
@@ -478,7 +483,7 @@ public:
     void Init(
         bool* ab, bool* sa, bool* tr, bool* ta, bool* hs, bool* wb,
         float* af, float* asmth, int* tb, float* sf, bool* sh, int* td, bool* tau, bool* dfc, bool* bt, int* am,
-        float* amd,
+        float* amd, float* abs_, bool* bd_, bool* lhf, bool* hsm,
         bool* stt, bool* aw, bool* bb, bool* bo, int* bok, int* boid, float* ho,
         bool* avo, bool* rsb, int* sb,
         bool* asc, bool* zf, float* zfct, bool* ash, bool* rc, float* rs_,
@@ -523,6 +528,7 @@ public:
         aimbotEnabled=ab; silentAimEnabled=sa; triggerbotEnabled=tr; triggerAdvanced=ta;
         headshotOnly=hs; wallBang=wb;         aimFOV=af; aimSmooth=asmth; targetBone=tb;
         aimMaxDistance=amd;
+        aimBulletSpeed=abs_; bulletDrop=bd_; lowestHealthFirst=lhf; humanSmooth=hsm;
         silentFOV=sf; silentHeadshot=sh; triggerDelay=td; triggerAutoShoot=tau;
         drawFovCircle=dfc; bulletTracking=bt; aimMode=am;
         stickToTarget=stt; autoWall=aw; bestBone=bb; boneOverride=bo; boneOverrideKey=bok; boneOverrideId=boid;

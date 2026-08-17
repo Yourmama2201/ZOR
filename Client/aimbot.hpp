@@ -37,6 +37,11 @@ private:
     bool recoilComp;
     float recoilStrength;
     float maxDistance;
+    bool bulletDrop;
+    float bulletSpeed;
+    float gravity;
+    bool lowestHealthFirst;
+    bool humanSmooth;
     bool wasScoped;
     DWORD lastShot;
 
@@ -62,7 +67,10 @@ private:
         }
         else if (bestBone) {
             float d = localPos.Distance(target.GetPosition());
-            bone = (d < 20.0f) ? Offsets::HEAD : (d < 60.0f ? Offsets::NECK : Offsets::SPINE1);
+            // Range-aware: head up close, neck at medium range, chest far out
+            // (bigger hitboxes at distance beat precision we can't hold).
+            bone = (d < 20.0f) ? Offsets::HEAD :
+                   (d < 60.0f) ? Offsets::NECK : Offsets::SPINE1;
         }
         return bone;
     }
@@ -86,7 +94,9 @@ public:
         boneOverrideId(Offsets::HEAD), lockedTarget(0), headOffset(0.0f),
         visibleOnly(false), riotShieldBypass(true), shieldBone(Offsets::LEFT_KNEE),
         autoScope(false), zoomFOV(false), zoomFactor(0.5f), autoShoot(false),
-        recoilComp(false), recoilStrength(1.0f), maxDistance(5000.0f), wasScoped(false), lastShot(0) {}
+        recoilComp(false), recoilStrength(1.0f), maxDistance(5000.0f),
+        bulletDrop(true), bulletSpeed(800.0f), gravity(9.8f),
+        lowestHealthFirst(true), humanSmooth(true), wasScoped(false), lastShot(0) {}
 
     void Run(std::vector<Player>& players, Vec3 localPos, int localTeam) {
         if (!enabled || !mem || players.empty()) return;
@@ -98,7 +108,7 @@ public:
         if (zoomFOV && wasScoped) effFOV *= zoomFactor;
 
         Player* target = nullptr;
-        float closestDist = effFOV;
+        float bestScore = 1e30f;
 
         for (auto& player : players) {
             if (player.GetTeam() == localTeam) continue;
@@ -140,8 +150,18 @@ public:
                 if (isBoss) fovDist *= 0.3f; // prioritize bosses
             }
 
-            if (fovDist < closestDist) {
-                closestDist = fovDist;
+            // Combined target score: FOV is king, but distance and (optionally)
+            // health break ties. Within the FOV cone we prefer the nearest and
+            // weakest target -> faster, more reliable kills.
+            float score = fovDist;
+            score += (distance / maxDistance) * effFOV * 0.5f;   // distance weight
+            if (lowestHealthFirst) {
+                float hp = player.GetHealth() + player.GetArmor();
+                score += (hp / 400.0f) * effFOV * 0.25f;          // weakest first
+            }
+
+            if (score < bestScore) {
+                bestScore = score;
                 target = &player;
             }
         }
@@ -153,17 +173,32 @@ public:
         int bone = PickBone(*target, localPos);
         Vec3 targetPos = headshotOnly ? CorrectHead(*target, target->GetHeadPos()) : target->GetBonePos(bone);
 
-        // Bullet tracking: predict movement
+        // Bullet tracking: predict movement AND account for projectile drop.
         if (bulletTracking) {
             Vec3 targetVel = target->GetVelocity();
-            float travelTime = localPos.Distance(targetPos) / 800.0f; // ~800m/s bullet speed
+            float dist = localPos.Distance(targetPos);
+            float travelTime = dist / bulletSpeed;
+
+            // Linear velocity lead on the moving target.
             targetPos.x += targetVel.x * travelTime;
             targetPos.y += targetVel.y * travelTime;
             targetPos.z += targetVel.z * travelTime;
+
+            // Projectile gravity: aim ABOVE the target so the bullet arcs down
+            // onto it. drop = 0.5 * g * t^2 (world Z is up).
+            if (bulletDrop) {
+                float drop = 0.5f * gravity * travelTime * travelTime;
+                targetPos.z += drop;
+            }
         }
 
         Vec3 angle = Math::CalculateAngle(localPos, targetPos);
-        angle = Math::SmoothAngle(viewAngles, angle, smoothness);
+
+        // Humanized smoothing: fast correction when far off, gentle ease-in near
+        // the target (avoids robotic micro-snaps).
+        float remain = Math::GetFOV(viewAngles, angle);
+        angle = humanSmooth ? Math::HumanSmooth(viewAngles, angle, smoothness, remain)
+                            : Math::SmoothAngle(viewAngles, angle, smoothness);
 
         // Recoil compensation: pull the view down by a proportional amount to fight kick
         if (recoilComp) {
@@ -197,6 +232,10 @@ public:
     void SetFOV(float f) { fov = f; }
     void SetSmoothness(float s) { smoothness = s; }
     void SetMaxDistance(float d) { maxDistance = d; }
+    void SetBulletDrop(bool b) { bulletDrop = b; }
+    void SetBulletSpeed(float s) { bulletSpeed = s; }
+    void SetLowestHealthFirst(bool b) { lowestHealthFirst = b; }
+    void SetHumanSmooth(bool b) { humanSmooth = b; }
     void SetTargetBone(int b) { targetBone = b; }
     void SetAimMode(int m) { aimMode = m; }
     void SetBulletTracking(bool b) { bulletTracking = b; }

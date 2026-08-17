@@ -139,7 +139,7 @@ bool  g_aimbotEnabled = true, g_silentAimEnabled = false,
       g_headshotOnly = false, g_wallBang = false,
       g_drawFovCircle = false, g_bulletTracking = true;
 float g_aimFOV = 30.0f, g_aimSmooth = 0.05f, g_silentFOV = 15.0f,
-      g_headOffset = 0.0f, g_aimMaxDistance = 5000.0f;
+      g_headOffset = 0.0f, g_aimMaxDistance = 5000.0f, g_bulletSpeed = 800.0f;
 int   g_targetBone = Offsets::HEAD, g_triggerDelay = 20,
       g_aimPriority = 0, g_aimMode = 0;
 bool  g_silentHeadshot = true, g_triggerAutoShoot = false;
@@ -151,6 +151,7 @@ bool  g_autoScope = false, g_zoomFOV = false;
 float g_zoomFactor = 0.5f;
 bool  g_autoShoot = false, g_recoilComp = false;
 float g_recoilStrength = 1.0f;
+bool  g_bulletDrop = true, g_lowestHealthFirst = true, g_humanSmooth = true;
 
 bool  g_espEnabled = true, g_wallhack = true, g_vehicleESP = true, g_lootESP = true,
       g_espBoxes = true, g_espSnaplines = true, g_espHealth = true,
@@ -274,6 +275,7 @@ void SaveConfig() {
     s("aimvo",g_aimVisibleOnly); s("rsb",g_riotShieldBypass); si("shbone",g_shieldBone);
     s("ascope",g_autoScope); s("zoomfov",g_zoomFOV); sf("zoomfct",g_zoomFactor);
     s("autoshoot",g_autoShoot); s("recoilcomp",g_recoilComp); sf("recoilstr",g_recoilStrength);
+    s("bulldrop",g_bulletDrop); s("lowhp",g_lowestHealthFirst); s("humsm",g_humanSmooth); sf("bulspd",g_bulletSpeed);
     s("esp",g_espEnabled); s("wallhack",g_wallhack); s("vesp",g_vehicleESP); s("lesp",g_lootESP);
     s("ebox",g_espBoxes); s("esnap",g_espSnaplines); s("ehealth",g_espHealth); s("enames",g_espNames);
     s("edist",g_espDistance); s("ehead",g_espHeadCircle);
@@ -331,6 +333,7 @@ void LoadConfig() {
     g_aimVisibleOnly=b("aimvo",0); g_riotShieldBypass=b("rsb",1); g_shieldBone=i("shbone",Offsets::LEFT_KNEE);
     g_autoScope=b("ascope",0); g_zoomFOV=b("zoomfov",0); g_zoomFactor=f("zoomfct",0.5f);
     g_autoShoot=b("autoshoot",0); g_recoilComp=b("recoilcomp",0); g_recoilStrength=f("recoilstr",1.0f);
+    g_bulletDrop=b("bulldrop",1); g_lowestHealthFirst=b("lowhp",1); g_humanSmooth=b("humsm",1); g_bulletSpeed=f("bulspd",800);
     g_espEnabled=b("esp",1); g_wallhack=b("wallhack",1); g_vehicleESP=b("vesp",1); g_lootESP=b("lesp",1);
     g_espBoxes=b("ebox",1); g_espSnaplines=b("esnap",1); g_espHealth=b("ehealth",1); g_espNames=b("enames",1);
     g_espDistance=b("edist",1); g_espHeadCircle=b("ehead",1);
@@ -445,7 +448,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
         &g_headshotOnly,&g_wallBang,&g_aimFOV,&g_aimSmooth,&g_targetBone,
         &g_silentFOV,&g_silentHeadshot,&g_triggerDelay,&g_triggerAutoShoot,
         &g_drawFovCircle,&g_bulletTracking,&g_aimMode,
-        &g_aimMaxDistance,
+        &g_aimMaxDistance,&g_bulletSpeed,&g_bulletDrop,&g_lowestHealthFirst,&g_humanSmooth,
         &g_stickToTarget,&g_autoWall,&g_bestBone,&g_boneOverride,
         &g_boneOverrideKey,&g_boneOverrideId,&g_headOffset,
         &g_aimVisibleOnly,&g_riotShieldBypass,&g_shieldBone,
@@ -576,6 +579,8 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
             g_aimbot->SetWallBang(g_wallBang); g_aimbot->SetFOV(g_aimFOV);
             g_aimbot->SetSmoothness(g_aimSmooth); g_aimbot->SetAimMode(g_aimMode);
             g_aimbot->SetMaxDistance(g_aimMaxDistance);
+            g_aimbot->SetBulletDrop(g_bulletDrop); g_aimbot->SetBulletSpeed(g_bulletSpeed);
+            g_aimbot->SetLowestHealthFirst(g_lowestHealthFirst); g_aimbot->SetHumanSmooth(g_humanSmooth);
             g_aimbot->SetBulletTracking(g_bulletTracking);
             g_aimbot->SetStickToTarget(g_stickToTarget); g_aimbot->SetAutoWall(g_autoWall);
             g_aimbot->SetBestBone(g_bestBone); g_aimbot->SetBoneOverride(g_boneOverride);
