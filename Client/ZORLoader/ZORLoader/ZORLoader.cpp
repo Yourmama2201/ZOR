@@ -421,6 +421,29 @@ static int g_platDown = -1;
 struct Particle { float x, y, r, speed, drift, alpha; };
 static Particle g_particles[28];
 static bool g_particlesInit = false;
+static Gdiplus::Bitmap* g_bgCache = NULL;
+static int g_bgCacheW = 0, g_bgCacheH = 0;
+
+// Render the static background (gradient + grid) once into a cached bitmap so
+// the per-frame cost is a single blit instead of dozens of GDI+ fills.
+static void BuildBackgroundCache(int W, int H) {
+    if (g_bgCache && g_bgCacheW == W && g_bgCacheH == H) return;
+    if (g_bgCache) { delete g_bgCache; g_bgCache = NULL; }
+    g_bgCache = new Bitmap(W, H, PixelFormat32bppARGB);
+    Graphics g(g_bgCache);
+    g.SetSmoothingMode(SmoothingModeNone);
+
+    RectF full(0, 0, (float)W, (float)H);
+    LinearGradientBrush bg(Rect(0, 0, W, H), BG_TOP, BG_BOT, 90.0f);
+    g.FillRectangle(&bg, full);
+
+    // fine grid lines for depth
+    Pen gridPen(Color(24, 40, 60, 110), 1.0f);
+    for (int x = 24; x < W; x += 32) g.DrawLine(&gridPen, (float)x, 0.0f, (float)x, (float)H);
+    for (int y = 24; y < H; y += 32) g.DrawLine(&gridPen, 0.0f, (float)y, (float)W, (float)y);
+
+    g_bgCacheW = W; g_bgCacheH = H;
+}
 
 // ============================================================================
 //  Debug logger (log -> UI panel)
@@ -929,7 +952,7 @@ static Color StepColor(StepState s, bool& pulse) {
 
 // Soft radial glow (layered translucent ellipses -> cheap fake blur).
 static void DrawGlow(Graphics& g, float cx, float cy, float radius, const Color& col) {
-    const int layers = 5;
+    const int layers = 3;
     for (int i = layers; i >= 1; i--) {
         float r = radius * ((float)i / (float)layers);
         BYTE a = (BYTE)((col.GetAlpha() * (layers - i + 1)) / (layers * 2));
@@ -1011,26 +1034,19 @@ static void DrawScene(HWND hwnd) {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
 
-    // ---- background gradient + vignette ----
-    RectF full(0, 0, (float)W, (float)H);
-    LinearGradientBrush bg(Rect(0, 0, W, H), BG_TOP, BG_BOT, 90.0f);
-    g.FillRectangle(&bg, full);
+    // ---- background gradient + vignette (cached, blit once) ----
+    BuildBackgroundCache(W, H);
+    g.DrawImage(g_bgCache, (REAL)0, (REAL)0, (REAL)W, (REAL)H);
 
-    // fine grid lines for depth
-    Pen gridPen(Color(24, 40, 60, 110), 1.0f);
-    for (int x = 24; x < W; x += 32) g.DrawLine(&gridPen, (float)x, 0.0f, (float)x, (float)H);
-    for (int y = 24; y < H; y += 32) g.DrawLine(&gridPen, 0.0f, (float)y, (float)W, (float)y);
-
-    // ---- drifting glow orbs ----
+    // ---- drifting glow orbs (smaller + fewer = cheap) ----
     struct Orb { float cx, cy, r; DWORD a; Color c; float sx, sy; };
-    Orb orbs[5] = {
-        { (float)W * 0.16f, (float)H * 0.14f, 300.0f, 55, NEON_PURPLE, 0.40f, 0.22f },
-        { (float)W * 0.82f, (float)H * 0.12f, 260.0f, 45, ACCENT,      0.55f, 0.30f },
-        { (float)W * 0.60f, (float)H * 0.85f, 320.0f, 40, NEON_PINK,   0.50f, 0.18f },
-        { (float)W * 0.30f, (float)H * 0.72f, 220.0f, 35, ACCENT,      0.35f, 0.40f },
-        { (float)W * 0.90f, (float)H * 0.55f, 240.0f, 40, NEON_PURPLE, 0.60f, 0.25f },
+    Orb orbs[4] = {
+        { (float)W * 0.16f, (float)H * 0.14f, 150.0f, 45, NEON_PURPLE, 0.40f, 0.22f },
+        { (float)W * 0.82f, (float)H * 0.12f, 130.0f, 38, ACCENT,      0.55f, 0.30f },
+        { (float)W * 0.60f, (float)H * 0.85f, 160.0f, 35, NEON_PINK,   0.50f, 0.18f },
+        { (float)W * 0.30f, (float)H * 0.72f, 120.0f, 30, ACCENT,      0.35f, 0.40f },
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         float ox = orbs[i].cx + sinf(g_pulse * orbs[i].sx + i * 1.7f) * 70.0f;
         float oy = orbs[i].cy + cosf(g_pulse * orbs[i].sy + i * 2.3f) * 50.0f;
         LinearGradientBrush orb(PointF(ox - orbs[i].r, oy - orbs[i].r),
@@ -1043,7 +1059,7 @@ static void DrawScene(HWND hwnd) {
     // ---- rising particle motes ----
     if (!g_particlesInit) {
         std::mt19937 rng((unsigned)GetTickCount());
-        for (int i = 0; i < 28; i++) {
+        for (int i = 0; i < 14; i++) {
             g_particles[i].x = (float)(rng() % W);
             g_particles[i].y = (float)(rng() % H);
             g_particles[i].r = 1.0f + (float)(rng() % 4) * 0.7f;
@@ -1053,7 +1069,7 @@ static void DrawScene(HWND hwnd) {
         }
         g_particlesInit = true;
     }
-    for (int i = 0; i < 28; i++) {
+    for (int i = 0; i < 14; i++) {
         g_particles[i].y -= g_particles[i].speed * 0.016f;
         g_particles[i].x += sinf(g_pulse * 1.2f + i) * g_particles[i].drift * 0.01f;
         if (g_particles[i].y < -10.0f) { g_particles[i].y = (float)H + 10.0f; g_particles[i].x = (float)(rand() % W); }
@@ -1340,11 +1356,11 @@ static void DrawScene(HWND hwnd) {
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CREATE: {
-            SetTimer(hwnd, 1, 16, NULL);
+            SetTimer(hwnd, 1, 33, NULL);
             return 0;
         }
         case WM_TIMER: {
-            g_pulse += 0.016f;
+            g_pulse += 0.033f;
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -1476,6 +1492,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd, 1);
+            if (g_bgCache) { delete g_bgCache; g_bgCache = NULL; }
             PostQuitMessage(0);
             return 0;
     }
