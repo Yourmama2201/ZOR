@@ -157,9 +157,13 @@ static ULONG_PTR FindLoadedModuleBase(PCWSTR wantedName) {
         PPEB_LDR_DATA ldr = peb->Ldr;
         if (!ldr) return 0;
 
-        LIST_ENTRY head = ldr->InLoadOrderModuleList;
-        PLDR_DATA_TABLE_ENTRY entry = (PLDR_DATA_TABLE_ENTRY)head.Flink;
-        for (int i = 0; i < 1024 && (ULONG_PTR)entry != (ULONG_PTR)&head; i++) {
+        // The list head lives in the TARGET's memory (ldr points there while
+        // attached). We must terminate against THAT address, not a stack copy
+        // of the LIST_ENTRY -- otherwise the walk runs off the end of the
+        // circular list, dereferences garbage, and misses every module.
+        ULONG_PTR headAddr = (ULONG_PTR)&ldr->InLoadOrderModuleList;
+        PLDR_DATA_TABLE_ENTRY entry = (PLDR_DATA_TABLE_ENTRY)ldr->InLoadOrderModuleList.Flink;
+        for (int i = 0; i < 1024 && (ULONG_PTR)entry != headAddr && entry; i++) {
             LDR_DATA_TABLE_ENTRY e;
             RtlCopyMemory(&e, entry, sizeof(e));
             if (e.BaseDllName.Buffer && e.BaseDllName.Length >= 2 * sizeof(WCHAR)) {
