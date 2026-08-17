@@ -39,6 +39,21 @@ NTSTATUS ZwQueryInformationProcess(
 typedef NTSTATUS(*pfnLdrLoadDll)(PWSTR, ULONG, PUNICODE_STRING, PHANDLE);
 typedef NTSTATUS(*pfnLdrGetProcedureAddress)(HANDLE, PUNICODE_STRING, USHORT, PVOID*);
 
+// NtCreateThreadEx is not exported by ntoskrnl.lib; resolved at runtime.
+typedef NTSTATUS(*pfnNtCreateThreadEx)(
+    PHANDLE ThreadHandle,
+    ACCESS_MASK DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    HANDLE ProcessHandle,
+    PVOID StartRoutine,
+    PVOID Argument,
+    ULONG CreateFlags,
+    SIZE_T ZeroBits,
+    SIZE_T StackSize,
+    SIZE_T MaximumStackSize,
+    PULONG AttributeList
+);
+
 #define LDR_LOAD_BLOCK (const unsigned char[]){0x16,0x3E,0x28,0x16,0x35,0x3B,0x3E,0x1E,0x36,0x36}
 #define LDR_GET_PROC_BLOCK (const unsigned char[]){0x16,0x3E,0x28,0x1D,0x3F,0x2E,0x0A,0x28,0x35,0x39,0x3F,0x3E,0x2F,0x28,0x3F,0x1B,0x3E,0x3E,0x28,0x3F,0x29,0x29}
 
@@ -286,15 +301,39 @@ NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
     return STATUS_SUCCESS;
 }
 
-NTSTATUS InjectDLL_APC(HANDLE pid, PUCHAR dllData, SIZE_T dllSize, PVOID* outBase) {
+// Find an export by name in the remote (manually-mapped) DLL image.
+static PVOID FindRemoteExport(PVOID imageBase, PIMAGE_NT_HEADERS nt, const char* wanted) {
+    PIMAGE_DATA_DIRECTORY edDir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!edDir->VirtualAddress || !edDir->Size) return NULL;
+    PIMAGE_EXPORT_DIRECTORY ed = (PIMAGE_EXPORT_DIRECTORY)((PUCHAR)imageBase + edDir->VirtualAddress);
+    ULONG* names = (ULONG*)((PUCHAR)imageBase + ed->AddressOfNames);
+    USHORT* ordinals = (USHORT*)((PUCHAR)imageBase + ed->AddressOfNameOrdinals);
+    ULONG* funcs = (ULONG*)((PUCHAR)imageBase + ed->AddressOfFunctions);
+
+    SIZE_T wantLen = 0;
+    while (wanted[wantLen]) wantLen++;
+
+    for (ULONG i = 0; i < ed->NumberOfNames; i++) {
+        const char* name = (const char*)((PUCHAR)imageBase + names[i]);
+        SIZE_T n = 0;
+        while (name[n]) n++;
+        if (n == wantLen) {
+            BOOLEAN same = TRUE;
+            for (SIZE_T k = 0; k < wantLen; k++) {
+                if (name[k] != wanted[k]) { same = FALSE; break; }
+            }
+            if (same) {
+                ULONG ord = ordinals[i];
+                return (PUCHAR)imageBase + funcs[ord];
+            }
+        }
+    }
+    return NULL;
+}
+
+NTSTATUS InjectDLL_Allocate(HANDLE pid, SIZE_T sizeOfImage, PVOID* outBase) {
     if (KeGetCurrentIrql() > PASSIVE_LEVEL) return STATUS_UNSUCCESSFUL;
-    if (!dllData || !dllSize) return STATUS_INVALID_PARAMETER;
-
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)dllData;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
-
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((PUCHAR)dllData + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
+    if (!sizeOfImage) return STATUS_INVALID_PARAMETER;
 
     PEPROCESS process = NULL;
     NTSTATUS status = PsLookupProcessByProcessId(pid, &process);
@@ -304,8 +343,7 @@ NTSTATUS InjectDLL_APC(HANDLE pid, PUCHAR dllData, SIZE_T dllSize, PVOID* outBas
     KeStackAttachProcess(process, &apcState);
 
     PVOID pRemoteDll = NULL;
-    SIZE_T regionSize = nt->OptionalHeader.SizeOfImage;
-
+    SIZE_T regionSize = sizeOfImage;
     status = ZwAllocateVirtualMemory(
         NtCurrentProcess(),
         &pRemoteDll, 0, &regionSize,
@@ -313,73 +351,340 @@ NTSTATUS InjectDLL_APC(HANDLE pid, PUCHAR dllData, SIZE_T dllSize, PVOID* outBas
         PAGE_EXECUTE_READWRITE
     );
 
-    if (!NT_SUCCESS(status)) {
-        KeUnstackDetachProcess(&apcState);
-        ObDereferenceObject(process);
-        return status;
-    }
-
-    RtlCopyMemory(pRemoteDll, dllData, nt->OptionalHeader.SizeOfHeaders);
-
-    PIMAGE_SECTION_HEADER sections = IMAGE_FIRST_SECTION(nt);
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-        PVOID dest = (PUCHAR)pRemoteDll + sections[i].VirtualAddress;
-        PVOID src = (PUCHAR)dllData + sections[i].PointerToRawData;
-        SIZE_T size = sections[i].SizeOfRawData;
-        if (size > 0) RtlCopyMemory(dest, src, size);
-    }
-
-    PIMAGE_DATA_DIRECTORY relocDir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
-    if (relocDir->Size > 0) {
-        PIMAGE_BASE_RELOCATION reloc = (PIMAGE_BASE_RELOCATION)((PUCHAR)pRemoteDll + relocDir->VirtualAddress);
-        PUCHAR relocEnd = (PUCHAR)reloc + relocDir->Size;
-        SIZE_T delta = (SIZE_T)pRemoteDll - nt->OptionalHeader.ImageBase;
-
-        while (reloc < (PIMAGE_BASE_RELOCATION)relocEnd && reloc->SizeOfBlock > 0) {
-            PUCHAR page = (PUCHAR)pRemoteDll + reloc->VirtualAddress;
-            USHORT* typeOffset = (USHORT*)(reloc + 1);
-            ULONG count = (reloc->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(USHORT);
-
-            for (ULONG i = 0; i < count; i++) {
-                USHORT entry = typeOffset[i];
-                USHORT type = entry >> 12;
-                USHORT offset = entry & 0xFFF;
-
-                if (type == IMAGE_REL_BASED_DIR64) {
-                    *(ULONG_PTR*)(page + offset) += delta;
-                }
-            }
-            reloc = (PIMAGE_BASE_RELOCATION)((PUCHAR)reloc + reloc->SizeOfBlock);
-        }
-    }
-
-    status = ResolveImportsRemotely(pRemoteDll, nt);
-    if (!NT_SUCCESS(status)) {
-        ZwFreeVirtualMemory(NtCurrentProcess(), &pRemoteDll, &regionSize, MEM_RELEASE);
-        KeUnstackDetachProcess(&apcState);
-        ObDereferenceObject(process);
-        return status;
-    }
-
-    typedef NTSTATUS(*DLL_ENTRY)(PVOID, ULONG, PVOID);
-    DLL_ENTRY entryPoint = (DLL_ENTRY)((PUCHAR)pRemoteDll + nt->OptionalHeader.AddressOfEntryPoint);
-
-    __try {
-        entryPoint(pRemoteDll, DLL_PROCESS_ATTACH, NULL);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        ZwFreeVirtualMemory(NtCurrentProcess(), &pRemoteDll, &regionSize, MEM_RELEASE);
-        KeUnstackDetachProcess(&apcState);
-        ObDereferenceObject(process);
-        return STATUS_UNSUCCESSFUL;
-    }
-
-    if (outBase) *outBase = pRemoteDll;
-
     KeUnstackDetachProcess(&apcState);
     ObDereferenceObject(process);
 
+    if (!NT_SUCCESS(status)) return status;
+    if (outBase) *outBase = pRemoteDll;
     return STATUS_SUCCESS;
+}
+
+// Find any thread owned by the target process (used for thread hijacking).
+static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
+    if (!process || !outThreadId) return STATUS_INVALID_PARAMETER;
+    HANDLE targetPid = PsGetProcessId(process);
+    if (!targetPid) return STATUS_INVALID_PARAMETER;
+
+    ULONG bufSize = 0x10000;
+    PVOID procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
+    if (!procBuf) return STATUS_INSUFFICIENT_RESOURCES;
+
+    NTSTATUS ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+    if (ns == STATUS_INFO_LENGTH_MISMATCH) {
+        ExFreePool(procBuf);
+        bufSize = 0x20000;
+        procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
+        if (!procBuf) return STATUS_INSUFFICIENT_RESOURCES;
+        ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+    }
+
+    if (!NT_SUCCESS(ns)) {
+        ExFreePool(procBuf);
+        return ns;
+    }
+
+    struct _SPI {
+        ULONG NextEntryOffset;
+        ULONG NumberOfThreads;
+        LARGE_INTEGER WorkingSetPrivateSize;
+        ULONG HardFaultCount;
+        ULONG NumberOfThreadsHighWatermark;
+        ULONGLONG CycleTime;
+        LARGE_INTEGER CreateTime;
+        LARGE_INTEGER UserTime;
+        LARGE_INTEGER KernelTime;
+        UNICODE_STRING ImageName;
+        LONG BasePriority;
+        ULONG_PTR UniqueProcessId;
+        ULONG_PTR InheritedFromUniqueProcessId;
+        ULONG HandleCount;
+        ULONG SessionId;
+        ULONG_PTR UniqueProcessKey;
+        ULONG_PTR PeakVirtualSize;
+        ULONG_PTR VirtualSize;
+        ULONG PageFaultCount;
+        ULONG_PTR PeakWorkingSetSize;
+        ULONG_PTR WorkingSetSize;
+        ULONG_PTR QuotaPeakPagedPoolUsage;
+        ULONG_PTR QuotaPagedPoolUsage;
+        ULONG_PTR QuotaPeakNonPagedPoolUsage;
+        ULONG_PTR QuotaNonPagedPoolUsage;
+        ULONG_PTR PagefileUsage;
+        ULONG_PTR PeakPagefileUsage;
+        ULONG_PTR PrivatePageCount;
+        LARGE_INTEGER ReadOperationCount;
+        LARGE_INTEGER WriteOperationCount;
+        LARGE_INTEGER OtherOperationCount;
+        LARGE_INTEGER ReadTransferCount;
+        LARGE_INTEGER WriteTransferCount;
+        LARGE_INTEGER OtherTransferCount;
+    };
+    // SYSTEM_THREAD_INFORMATION (array follows the process struct).
+    struct _STI {
+        LARGE_INTEGER KernelTime;
+        LARGE_INTEGER UserTime;
+        LARGE_INTEGER CreateTime;
+        ULONG WaitTime;
+        PVOID StartAddress;
+        CLIENT_ID ClientId;
+        LONG Priority;
+        LONG BasePriority;
+        ULONG ContextSwitches;
+        ULONG ThreadState;
+        ULONG WaitReason;
+    };
+
+    NTSTATUS result = STATUS_NOT_FOUND;
+    PUCHAR p = (PUCHAR)procBuf;
+    for (;;) {
+        struct _SPI* spi = (struct _SPI*)p;
+        if ((ULONG_PTR)spi->UniqueProcessId == (ULONG_PTR)targetPid) {
+            struct _STI* threads = (struct _STI*)((PUCHAR)spi + sizeof(struct _SPI));
+            // Prefer a thread that is Ready(1)/Running(2)/Standby(3) so it
+            // returns to user mode soon and picks up our hijacked context.
+            // ThreadState 5 (Waiting) threads may be parked in a kernel wait
+            // and never come back, so only use them as a last resort.
+            ULONG fallback = 0xFFFFFFFF;
+            for (ULONG i = 0; i < spi->NumberOfThreads && i < 256; i++) {
+                struct _STI* t = &threads[i];
+                if (!t->ClientId.UniqueThread) continue;
+                if (t->ThreadState == 1 || t->ThreadState == 2 || t->ThreadState == 3) {
+                    *outThreadId = (ULONG_PTR)t->ClientId.UniqueThread;
+                    result = STATUS_SUCCESS;
+                    break;
+                }
+                // Last resort: any live thread (not Initialized/Terminated).
+                if (fallback == 0xFFFFFFFF && t->ThreadState != 0 && t->ThreadState != 4) {
+                    fallback = (ULONG_PTR)t->ClientId.UniqueThread;
+                }
+            }
+            if (!NT_SUCCESS(result) && fallback != 0xFFFFFFFF) {
+                *outThreadId = fallback;
+                result = STATUS_SUCCESS;
+            }
+            break;
+        }
+        if (spi->NextEntryOffset == 0) break;
+        p += spi->NextEntryOffset;
+    }
+
+    ExFreePool(procBuf);
+    return result;
+}
+
+NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL) return STATUS_UNSUCCESSFUL;
+    if (!pRemoteDll) return STATUS_INVALID_PARAMETER;
+
+    // Read the remote PE header to drive relocation/import/entry processing.
+    // pRemoteDll lives in the target process; attach so direct derefs work.
+    PEPROCESS process = NULL;
+    NTSTATUS status = PsLookupProcessByProcessId(pid, &process);
+    if (!NT_SUCCESS(status)) return status;
+
+    KAPC_STATE apcState;
+    KeStackAttachProcess(process, &apcState);
+
+    PIMAGE_DOS_HEADER dos = NULL;
+    PIMAGE_NT_HEADERS nt = NULL;
+    __try {
+        dos = (PIMAGE_DOS_HEADER)pRemoteDll;
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+        nt = (PIMAGE_NT_HEADERS)((PUCHAR)pRemoteDll + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+
+        PIMAGE_DATA_DIRECTORY relocDir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        if (relocDir->Size > 0) {
+            PIMAGE_BASE_RELOCATION reloc = (PIMAGE_BASE_RELOCATION)((PUCHAR)pRemoteDll + relocDir->VirtualAddress);
+            PUCHAR relocEnd = (PUCHAR)reloc + relocDir->Size;
+            SIZE_T delta = (SIZE_T)pRemoteDll - nt->OptionalHeader.ImageBase;
+
+            while (reloc < (PIMAGE_BASE_RELOCATION)relocEnd && reloc->SizeOfBlock > 0) {
+                PUCHAR page = (PUCHAR)pRemoteDll + reloc->VirtualAddress;
+                USHORT* typeOffset = (USHORT*)(reloc + 1);
+                ULONG count = (reloc->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(USHORT);
+
+                for (ULONG i = 0; i < count; i++) {
+                    USHORT entry = typeOffset[i];
+                    USHORT type = entry >> 12;
+                    USHORT offset = entry & 0xFFF;
+
+                    if (type == IMAGE_REL_BASED_DIR64) {
+                        *(ULONG_PTR*)(page + offset) += delta;
+                    }
+                }
+                reloc = (PIMAGE_BASE_RELOCATION)((PUCHAR)reloc + reloc->SizeOfBlock);
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = STATUS_ACCESS_VIOLATION;
+        goto done;
+    }
+
+    status = ResolveImportsRemotely(pRemoteDll, nt);
+    if (!NT_SUCCESS(status)) goto done;
+
+    // The client exports ZorMain(), which runs the whole cheat inline on the
+    // hijacked thread and never returns. This avoids NtCreateThreadEx entirely
+    // (Ricochet hooks thread creation).
+    PVOID zorMain = FindRemoteExport(pRemoteDll, nt, "ZorMain");
+    if (!zorMain) { status = STATUS_PROCEDURE_NOT_FOUND; goto done; }
+
+    typedef NTSTATUS(*DLL_ENTRY)(PVOID, ULONG, PVOID);
+    DLL_ENTRY entryPoint = (DLL_ENTRY)((PUCHAR)pRemoteDll + nt->OptionalHeader.AddressOfEntryPoint);
+    if (!entryPoint) { status = STATUS_INVALID_IMAGE_FORMAT; goto done; }
+
+    // Run the entry point on a REAL user-mode thread in the target via thread
+    // hijacking. Calling it directly from this attached kernel thread lacks a
+    // user TEB/TLS/thread context, so DllMain (CreateThread/CRT) faults. We
+    // hijack an existing game thread instead of creating a new one (Ricochet
+    // hooks thread creation).
+    PVOID stubAddr = NULL;
+    SIZE_T stubSize = 0x1000;
+    status = ZwAllocateVirtualMemory(
+        NtCurrentProcess(),
+        &stubAddr, 0, &stubSize,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE
+    );
+    if (!NT_SUCCESS(status)) goto done;
+
+// Create the user thread in the target via SPECIAL USER APC (no
+    // NtCreateThreadEx -- Ricochet hooks thread creation). We queue a user
+    // APC to an existing game thread; it fires on the thread's next
+    // kernel->user transition and runs the stub in the target process.
+    PETHREAD hThread = NULL;
+    {
+        ULONG_PTR threadId = 0;
+        PEPROCESS p = process;
+        status = FindTargetThread(p, &threadId);
+        if (!NT_SUCCESS(status) || !threadId) {
+            status = STATUS_NOT_FOUND;
+            ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+            goto done;
+        }
+        status = PsLookupThreadByThreadId((HANDLE)threadId, &hThread);
+        if (!NT_SUCCESS(status)) {
+            ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+            goto done;
+        }
+    }
+
+    // Flags the stub sets: ranFlag = 1 on first instruction (before DllMain),
+    // doneFlag = 1 after the entry point returns. Placed at stub+0x100.
+    volatile LONG* ranFlag = (volatile LONG*)((PUCHAR)stubAddr + 0x100);
+    volatile LONG* doneFlag = (volatile LONG*)((PUCHAR)stubAddr + 0x104);
+    *ranFlag = 0;
+    *doneFlag = 0;
+
+    // Build the APC stub: set ran flag, reserve shadow space, set args,
+    // call entry (CRT init), set done flag, then call ZorMain which runs the
+    // cheat forever on this thread (never returns).
+    //   mov rcx, ranFlag | mov dword [rcx], 1
+    //   sub rsp,0x28 | mov rcx, hModule | mov edx, DLL_PROCESS_ATTACH |
+    //   xor r8d,r8d | mov rax, entryPoint | call rax
+    //   mov rcx, doneFlag | mov dword [rcx], 1
+    //   mov rax, ZorMain | call rax
+    //   jmp $   (safety spin; normally unreachable)
+    UCHAR stub[96] = { 0 };
+    UCHAR* s = stub;
+    *s++ = 0x48; *s++ = 0xB9;                                     // mov rcx, imm64 (ran flag)
+    *(ULONG_PTR*)s = (ULONG_PTR)ranFlag; s += 8;
+    *s++ = 0xC7; *s++ = 0x01; *s++ = 0x01; *s++ = 0x00; *s++ = 0x00; *s++ = 0x00; // mov dword [rcx], 1
+    *s++ = 0x48; *s++ = 0x83; *s++ = 0xEC; *s++ = 0x28;          // sub rsp, 0x28
+    *s++ = 0x48; *s++ = 0xB9;                                     // mov rcx, imm64
+    *(ULONG_PTR*)s = (ULONG_PTR)pRemoteDll; s += 8;
+    *s++ = 0xBA; *(ULONG*)s = DLL_PROCESS_ATTACH; s += 4;         // mov edx, 1
+    *s++ = 0x45; *s++ = 0x33; *s++ = 0xC0;                        // xor r8d, r8d
+    *s++ = 0x48; *s++ = 0xB8;                                     // mov rax, imm64
+    *(ULONG_PTR*)s = (ULONG_PTR)entryPoint; s += 8;
+    *s++ = 0xFF; *s++ = 0xD0;                                     // call rax
+    *s++ = 0x48; *s++ = 0xB9;                                     // mov rcx, imm64 (done flag)
+    *(ULONG_PTR*)s = (ULONG_PTR)doneFlag; s += 8;
+    *s++ = 0xC7; *s++ = 0x01; *s++ = 0x01; *s++ = 0x00; *s++ = 0x00; *s++ = 0x00; // mov dword [rcx], 1
+    *s++ = 0x48; *s++ = 0xB8;                                     // mov rax, imm64
+    *(ULONG_PTR*)s = (ULONG_PTR)zorMain; s += 8;
+    *s++ = 0xFF; *s++ = 0xD0;                                     // call rax (ZorMain; never returns)
+    *s++ = 0xEB; *s++ = 0xFE;                                     // jmp $ (safety)
+    SIZE_T stubLen = (SIZE_T)(s - stub);
+
+    __try {
+        RtlCopyMemory(stubAddr, stub, stubLen);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = STATUS_ACCESS_VIOLATION;
+        ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+        goto done;
+    }
+
+    // Deliver the stub via a SPECIAL USER APC. Unlike a normal user APC
+    // (QueueUserAPC), a special user APC fires on the thread's next
+    // kernel->user transition regardless of alertable state, so it runs even
+    // on threads that are not in an alertable wait. NtQueueApcThreadEx is not
+    // in ntoskrnl.lib; resolve it at runtime. In kernel mode a thread HANDLE
+    // is the PETHREAD pointer directly (kernel-handle convention: high bit
+    // set => direct object pointer).
+    //   NTSTATUS NtQueueApcThreadEx(HANDLE ThreadHandle, ULONG UserApcOption,
+    //       PVOID ApcRoutine, PVOID ApcArgument1, PVOID ApcArgument2,
+    //       PVOID ApcArgument3);
+    typedef NTSTATUS(*pfnQueueApcThreadEx)(
+        HANDLE, ULONG, PVOID, PVOID, PVOID, PVOID);
+#define USER_APC_OPTION_SPECIAL_USER_APC 0x0001
+    UNICODE_STRING uQueueApc;
+    RtlInitUnicodeString(&uQueueApc, L"NtQueueApcThreadEx");
+    pfnQueueApcThreadEx pQueueApc = (pfnQueueApcThreadEx)MmGetSystemRoutineAddress(&uQueueApc);
+    if (!pQueueApc) {
+        status = STATUS_PROCEDURE_NOT_FOUND;
+        ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+        goto done;
+    }
+
+    status = pQueueApc((HANDLE)hThread, USER_APC_OPTION_SPECIAL_USER_APC,
+                       stubAddr, NULL, NULL, NULL);
+    if (!NT_SUCCESS(status)) {
+        ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+        goto done;
+    }
+
+    // Wait for the stub to signal (bounded so we never hang the game thread).
+    status = STATUS_UNSUCCESSFUL;
+    for (int i = 0; i < 200; i++) { // ~20s max (100ms sleeps)
+        if (*doneFlag) { status = STATUS_SUCCESS; break; }
+        LARGE_INTEGER delay;
+        delay.QuadPart = -100 * 10000; // 100ms
+        KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    }
+
+    if (!NT_SUCCESS(status)) {
+        // Distinguish "stub never ran" from "stub ran but entry crashed/hung".
+        if (*ranFlag) status = STATUS_ACCESS_VIOLATION;  // entry threw/hung
+        else status = STATUS_UNSUCCESSFUL;               // APC never fired
+
+        // On failure the APC either never fired or the stub crashed; the APC is
+        // still pending on the target thread, so we must NOT free the stub (a
+        // late-firing APC would execute freed memory). Leak it; the loader
+        // reboots/retries anyway. The game thread is untouched.
+        ObDereferenceObject(hThread);
+    } else {
+        // Thread consumed by the cheat; don't touch it. Stub stays mapped.
+        ObDereferenceObject(hThread);
+        if (outBase) *outBase = pRemoteDll;
+    }
+
+done:
+    KeUnstackDetachProcess(&apcState);
+    ObDereferenceObject(process);
+    return status;
 }
 
 NTSTATUS ReadMemory(HANDLE pid, ULONG_PTR address, PVOID buffer, SIZE_T size) {
@@ -448,29 +753,33 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
 
     switch (stack->Parameters.DeviceIoControl.IoControlCode) {
 
-    case IOCTL_INJECT_DLL: {
-        if (inputBufferLength < (ULONG)FIELD_OFFSET(INJECT_REQUEST, DllData)) {
+    case IOCTL_INJECT_ALLOC: {
+        if (inputBufferLength < sizeof(INJECT_ALLOC_REQUEST)) {
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
+        PINJECT_ALLOC_REQUEST req = (PINJECT_ALLOC_REQUEST)buffer;
+        PVOID remoteBase = NULL;
+        NTSTATUS allocStatus = InjectDLL_Allocate(req->ProcessId, req->SizeOfImage, &remoteBase);
+        req->RemoteBase = remoteBase;
+        req->ErrorStatus = allocStatus;
+        bytes = sizeof(INJECT_ALLOC_REQUEST);
+        // Always report success so the loader receives ErrorStatus back.
+        status = STATUS_SUCCESS;
+        break;
+    }
 
-        PINJECT_REQUEST req = (PINJECT_REQUEST)buffer;
-        if (req && req->DllSize > 0) {
-            SIZE_T requiredSize = FIELD_OFFSET(INJECT_REQUEST, DllData) + req->DllSize;
-            if (inputBufferLength < (ULONG)requiredSize) {
-                status = STATUS_BUFFER_TOO_SMALL;
-                break;
-            }
-
-            PVOID remoteBase = NULL;
-            status = InjectDLL_APC(req->ProcessId, req->DllData, req->DllSize, &remoteBase);
-            req->Success = NT_SUCCESS(status);
-            req->RemoteBase = remoteBase;
-            bytes = sizeof(INJECT_REQUEST);
+    case IOCTL_INJECT_EXEC: {
+        if (inputBufferLength < sizeof(INJECT_EXEC_REQUEST)) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
         }
-        else {
-            status = STATUS_INVALID_PARAMETER;
-        }
+        PINJECT_EXEC_REQUEST req = (PINJECT_EXEC_REQUEST)buffer;
+        NTSTATUS execStatus = InjectDLL_Exec(req->ProcessId, req->RemoteBase, &req->RemoteBase);
+        req->ErrorStatus = execStatus;
+        bytes = sizeof(INJECT_EXEC_REQUEST);
+        // Always report success so the loader receives ErrorStatus back.
+        status = STATUS_SUCCESS;
         break;
     }
 
@@ -728,6 +1037,11 @@ static NTSTATUS RealDriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registry)
     if (!NT_SUCCESS(status)) {
         return status;
     }
+
+    // IoCreateDriver does not run the I/O manager's post-DriverEntry cleanup,
+    // so the DO_DEVICE_INITIALIZING flag set by IoCreateDevice would otherwise
+    // stay set forever and make the device unopenable from user mode.
+    g_DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     status = IoCreateSymbolicLink(&g_SymLink, &g_DevName);
     if (!NT_SUCCESS(status)) {

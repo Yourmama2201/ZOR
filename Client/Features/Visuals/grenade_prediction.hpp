@@ -27,10 +27,12 @@ public:
     void Render(int screenWidth, int screenHeight) {
         if (!enabled || !mem || !gameBase) return;
 
+        Matrix4x4 viewMatrix = {};
         uintptr_t cameraBase = mem->Read<uintptr_t>(gameBase + Offsets::CAMERA_BASE);
-        if (!cameraBase) return;
-
-        Matrix4x4 viewMatrix = mem->Read<Matrix4x4>(cameraBase + 0x100);
+        if (cameraBase) viewMatrix = mem->Read<Matrix4x4>(cameraBase + 0x100);
+        if (viewMatrix.IsIdentity())
+            viewMatrix = mem->Read<Matrix4x4>(gameBase + Offsets::CAMERA_MATRIX);
+        if (viewMatrix.IsIdentity()) return;
 
         NadeInfo nade = GetNadeInfo();
         if (!nade.isActive) return;

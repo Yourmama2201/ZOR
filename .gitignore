@@ -36,6 +36,8 @@ cs16_dump/
 !Tools/kdmapper/kdmapper.exe
 !Client/x64/Release/
 !Client/x64/Release/ZORClient.dll
+!Client/ZORLoader/ZORLoader/x64/Release/
+!Client/ZORLoader/ZORLoader/x64/Release/ZORLoader.exe
 
 # --- MSBuild incidental files ---
 *.recipe

@@ -53,8 +53,8 @@ static std::wstring RandomWStringFrom(const wchar_t* const* pool, int count) {
 static void InitDisguise() {
     // Fixed identity every launch - no random rename. The loader always runs
     // as ZORLoader.exe with a stable window/log name.
-    g_fakeName = L"ZORLoader";
-    g_fakeClass = L"ZORLoader";
+    g_fakeName = L"ZOR Loader v8.0";
+    g_fakeClass = L"ZOR";
     g_fakeExeName = L"ZORLoader.exe";
 }
 
@@ -94,60 +94,11 @@ static HICON LoadFakeSystemIcon() {
 }
 
 // ============================================================================
-//  Remote drop helpers (download driver + client from GitHub, hide on disk)
+//  Local file helpers (load driver + client from DMZ_FILES, hide on disk)
 // ============================================================================
-// TODO: point these at your real GitHub release URLs (raw.githubusercontent
-// works for public repos; for private repos use an authenticated release URL).
-static const wchar_t* g_remoteDriverUrl = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Driver/nxs_drv.sys";
-
-static const wchar_t* g_remoteDllUrl   = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Client/x64/Release/ZORClient.dll";
-
-static const wchar_t* g_remoteKdmapperUrl = L"https://raw.githubusercontent.com/Yourmama2201/ZOR/master/Tools/kdmapper/kdmapper.exe";
-
-static bool DownloadToMemory(const wchar_t* url, std::vector<BYTE>& out) {
-    out.clear();
-    HINTERNET hSession = WinHttpOpen(L"ZORUpdater/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return false;
-
-    URL_COMPONENTS uc = { sizeof(uc) };
-    wchar_t host[256] = {}, path[2048] = {}, extra[256] = {};
-    uc.lpszHostName = host; uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
-    uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 256;
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) { WinHttpCloseHandle(hSession); return false; }
-
-    bool ok = false;
-    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (hConnect) {
-        DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-        HINTERNET hReq = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER,
-            NULL, flags);
-        if (hReq) {
-            if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-                WinHttpReceiveResponse(hReq, NULL)) {
-                DWORD status = 0, statusLen = sizeof(status);
-                WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusLen, WINHTTP_NO_HEADER_INDEX);
-                if (status == 200) {
-                    DWORD avail = 0;
-                    BYTE buf[16384];
-                    while (WinHttpQueryDataAvailable(hReq, &avail) && avail > 0) {
-                        DWORD read = 0;
-                        if (!WinHttpReadData(hReq, buf, min(avail, (DWORD)sizeof(buf)), &read) || read == 0) break;
-                        out.insert(out.end(), buf, buf + read);
-                    }
-                }
-                ok = !out.empty();
-            }
-            WinHttpCloseHandle(hReq);
-        }
-        WinHttpCloseHandle(hConnect);
-    }
-    WinHttpCloseHandle(hSession);
-    return ok;
-}
+// The loader prefers local built artifacts but falls back to downloading the
+// driver / kdmapper / client DLL from the public GitHub repo (raw download), so
+// a fresh machine only needs the loader exe.
 
 // Write bytes to a hidden temp file with a random-looking name. Returns full path
 // or empty string on failure. Caller should delete the file after use.
@@ -222,6 +173,73 @@ public:
 };
 
 static DebugLogger* g_Debug = nullptr;
+
+// ============================================================================
+//  GitHub raw download: fetches the driver / kdmapper / client DLL from the
+//  public repo so a fresh machine needs only this single loader exe. Uses the
+//  same WinHTTP transport as the client auth system. Falls back to local files
+//  automatically when offline.
+// ============================================================================
+static const wchar_t* g_ghHost = L"raw.githubusercontent.com";
+static const wchar_t* g_ghPathPrefix = L"/Yourmama2201/ZOR/master/";
+
+// Download a file from the public repo. Returns false on any failure.
+static bool DownloadFromGitHub(const char* repoPath, std::vector<BYTE>& out) {
+    out.clear();
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) ZORLoader/8.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    if (!hSession) return false;
+
+    bool ok = false;
+    HINTERNET hConnect = WinHttpConnect(hSession, g_ghHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (hConnect) {
+        std::wstring path = std::wstring(g_ghPathPrefix) +
+            std::wstring(repoPath, repoPath + strlen(repoPath));
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(), NULL,
+            NULL, NULL, WINHTTP_FLAG_SECURE);
+        if (hRequest) {
+            BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+            if (sent && WinHttpReceiveResponse(hRequest, NULL)) {
+                DWORD status = 0, statusLen = sizeof(status);
+                WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusLen, WINHTTP_NO_HEADER_INDEX);
+                if (status == 200) {
+                    DWORD avail = 0, read = 0;
+                    while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+                        size_t oldSize = out.size();
+                        out.resize(oldSize + avail);
+                        if (!WinHttpReadData(hRequest, out.data() + oldSize, avail, &read)) break;
+                        out.resize(oldSize + read);
+                        if (read == 0) break;
+                    }
+                    ok = (out.size() > 0);
+                }
+            }
+            WinHttpCloseHandle(hRequest);
+        }
+        WinHttpCloseHandle(hConnect);
+    }
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
+
+// Try local path first, then GitHub. Returns false if both fail.
+static bool AcquireFile(const char* localPath, const char* repoPath, std::vector<BYTE>& out,
+    const char* label) {
+    if (ReadFileToVector(localPath, out)) {
+        g_Debug->Log(std::string("Loaded ") + label + " from local: " + localPath);
+        return true;
+    }
+    g_Debug->Log(std::string("Local ") + label + " not found, downloading from GitHub...");
+    if (DownloadFromGitHub(repoPath, out)) {
+        g_Debug->Log(std::string("[+] Downloaded ") + label + " from GitHub (" +
+            std::to_string(out.size()) + " bytes)");
+        return true;
+    }
+    g_Debug->LogError(std::string(label) + " fetch failed", 0);
+    return false;
+}
 
 // Copy the on-screen console contents to the Windows clipboard.
 static void CopyConsoleToClipboard(HWND hwnd) {
@@ -335,8 +353,8 @@ static bool MapViaKdmapper(const std::vector<BYTE>& kdmapperData,
 // ============================================================================
 //  UI state
 // ============================================================================
-static const int WIN_W = 760;
-static const int WIN_H = 560;
+static const int WIN_W = 880;
+static const int WIN_H = 640;
 
 static const Color ACCENT(255, 0, 229, 255);        // neon cyan
 static const Color ACCENT_DIM(200, 0, 229, 255);
@@ -373,23 +391,53 @@ static bool g_btnHover = false;
 static bool g_btnDown = false;
 static bool g_copyHover = false;
 static bool g_copyDown = false;
+static bool g_closeHover = false;
+static bool g_closeDown = false;
+static const int TITLEBAR_H = 34;
 static Font* g_fontTitle = NULL;
 static Font* g_fontBig = NULL;
 static Font* g_fontNormal = NULL;
 static Font* g_fontSmall = NULL;
+static Font* g_fontMono = NULL;
+
+// Gaming platform selector.
+enum GamePlatform { PLAT_BATTLE, PLAT_STEAM, PLAT_XBOX };
+static GamePlatform g_platform = PLAT_BATTLE;
+static int g_platHover = -1;
+static int g_platDown = -1;
+
+// Floating particle field.
+struct Particle { float x, y, r, speed, drift, alpha; };
+static Particle g_particles[28];
+static bool g_particlesInit = false;
 
 // ============================================================================
 //  Debug logger (log -> UI panel)
 // ============================================================================
-#define IOCTL_INJECT_DLL CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_INJECT_ALLOC CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_INJECT_EXEC  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x901, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_READ_MEMORY  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_WRITE_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-typedef struct _INJECT_REQUEST {
+typedef struct _INJECT_ALLOC_REQUEST {
     HANDLE ProcessId;
-    SIZE_T DllSize;
-    BOOLEAN Success;
+    SIZE_T SizeOfImage;
     PVOID RemoteBase;
-    UCHAR DllData[1];
-} INJECT_REQUEST, * PINJECT_REQUEST;
+    NTSTATUS ErrorStatus;
+} INJECT_ALLOC_REQUEST, * PINJECT_ALLOC_REQUEST;
+
+typedef struct _INJECT_EXEC_REQUEST {
+    HANDLE ProcessId;
+    PVOID RemoteBase;
+    NTSTATUS ErrorStatus;
+} INJECT_EXEC_REQUEST, * PINJECT_EXEC_REQUEST;
+
+typedef struct _MEMORY_REQUEST {
+    HANDLE ProcessId;
+    ULONG_PTR Address;
+    PVOID Buffer;
+    SIZE_T Size;
+} MEMORY_REQUEST, * PMEMORY_REQUEST;
 
 // ============================================================================
 //  Core logic (unchanged from v7.1)
@@ -452,23 +500,90 @@ PVOID InjectViaDriver(DWORD pid, PVOID dllData, SIZE_T dllSize) {
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hDevice == INVALID_HANDLE_VALUE) { g_Debug->LogError("CreateFileW \\\\.\\ZOR", GetLastError()); return NULL; }
 
-    SIZE_T totalSize = FIELD_OFFSET(INJECT_REQUEST, DllData) + dllSize;
-    PUCHAR buffer = (PUCHAR)malloc(totalSize);
-    if (!buffer) { CloseHandle(hDevice); return NULL; }
+    // Parse the local DLL image headers to drive the manual map.
+    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)dllData;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) { CloseHandle(hDevice); return NULL; }
+    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((BYTE*)dllData + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) { CloseHandle(hDevice); return NULL; }
 
-    PINJECT_REQUEST req = (PINJECT_REQUEST)buffer;
-    req->ProcessId = (HANDLE)(ULONG_PTR)pid;
-    req->DllSize = dllSize;
-    req->Success = FALSE;
-    req->RemoteBase = NULL;
-    memcpy(req->DllData, dllData, dllSize);
-
+    // Phase 1: allocate a remote RWX region of SizeOfImage in the target.
+    INJECT_ALLOC_REQUEST allocReq = {};
+    allocReq.ProcessId = (HANDLE)(ULONG_PTR)pid;
+    allocReq.SizeOfImage = nt->OptionalHeader.SizeOfImage;
     DWORD bytesReturned = 0;
-    BOOL result = DeviceIoControl(hDevice, IOCTL_INJECT_DLL, buffer, (DWORD)totalSize,
-        buffer, (DWORD)totalSize, &bytesReturned, NULL);
-    PVOID remoteBase = NULL;
-    if (result && req->Success) remoteBase = req->RemoteBase;
-    free(buffer);
+    BOOL ok = DeviceIoControl(hDevice, IOCTL_INJECT_ALLOC, &allocReq, sizeof(allocReq),
+        &allocReq, sizeof(allocReq), &bytesReturned, NULL);
+    if (!ok || !allocReq.RemoteBase) {
+        char b[96];
+        sprintf_s(b, "Alloc: ioctl=%d lasterr=%u status=0x%08X", ok ? 1 : 0, GetLastError(),
+            (unsigned long)allocReq.ErrorStatus);
+        g_Debug->Log(b);
+        CloseHandle(hDevice);
+        return NULL;
+    }
+    PVOID remoteBase = allocReq.RemoteBase;
+    g_Debug->Log("[+] Allocated 0x" + std::to_string((unsigned long long)remoteBase));
+
+    // Phase 2: write the DLL image in chunks (headers + each section) via IOCTL_WRITE_MEMORY.
+    const SIZE_T chunkSize = 0x4000; // 16KB per request, well under buffer limits
+    struct { DWORD pid; ULONG_PTR addr; PVOID buf; SIZE_T size; } wr = {};
+    wr.pid = pid;
+
+    auto writeRemote = [&](ULONG_PTR remoteAddr, const BYTE* src, SIZE_T len) -> bool {
+        for (SIZE_T off = 0; off < len; ) {
+            SIZE_T n = (len - off > chunkSize) ? chunkSize : (len - off);
+            SIZE_T reqSize = sizeof(MEMORY_REQUEST) + n;
+            std::vector<BYTE> buf(reqSize);
+            PMEMORY_REQUEST mr = (PMEMORY_REQUEST)buf.data();
+            mr->ProcessId = (HANDLE)(ULONG_PTR)pid;
+            mr->Address = remoteAddr + off;
+            mr->Size = n;
+            memcpy(buf.data() + sizeof(MEMORY_REQUEST), src + off, n);
+            DWORD br = 0;
+            if (!DeviceIoControl(hDevice, IOCTL_WRITE_MEMORY, buf.data(), (DWORD)reqSize,
+                buf.data(), (DWORD)reqSize, &br, NULL)) {
+                char b[96];
+                sprintf_s(b, "Write 0x%llX+0x%X failed lasterr=%u", (unsigned long long)remoteAddr,
+                    (unsigned)off, GetLastError());
+                g_Debug->Log(b);
+                return false;
+            }
+            off += n;
+        }
+        return true;
+    };
+
+    // Headers -> base.
+    SIZE_T headerSize = nt->OptionalHeader.SizeOfHeaders;
+    if (!writeRemote((ULONG_PTR)remoteBase, (const BYTE*)dllData, headerSize)) {
+        CloseHandle(hDevice); return NULL;
+    }
+
+    // Sections -> base + VirtualAddress.
+    PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (!sec->SizeOfRawData) continue;
+        if (!writeRemote((ULONG_PTR)remoteBase + sec->VirtualAddress,
+            (const BYTE*)dllData + sec->PointerToRawData, sec->SizeOfRawData)) {
+            CloseHandle(hDevice); return NULL;
+        }
+    }
+    g_Debug->Log("[+] DLL image written to target");
+
+    // Phase 3: relocations + imports + entry.
+    INJECT_EXEC_REQUEST execReq = {};
+    execReq.ProcessId = (HANDLE)(ULONG_PTR)pid;
+    execReq.RemoteBase = remoteBase;
+    ok = DeviceIoControl(hDevice, IOCTL_INJECT_EXEC, &execReq, sizeof(execReq),
+        &execReq, sizeof(execReq), &bytesReturned, NULL);
+    if (!ok || !NT_SUCCESS(execReq.ErrorStatus)) {
+        char b[160];
+        sprintf_s(b, "Exec: ioctl=%d lasterr=%u ErrorStatus=0x%08X", ok ? 1 : 0, GetLastError(),
+            (unsigned long)execReq.ErrorStatus);
+        g_Debug->Log(b);
+        CloseHandle(hDevice);
+        return NULL;
+    }
     CloseHandle(hDevice);
     return remoteBase;
 }
@@ -503,9 +618,36 @@ const char* FindExisting(const char* fallback, const char* path1, const char* pa
 // ============================================================================
 static const wchar_t* g_gameLaunchPath = L"C:\\Program Files (x86)\\Call of Duty Modern Warfare II\\_retail_\\cod22-cod.exe";
 
+static const wchar_t* PlatformNames[3] = { L"Battle.net", L"Steam", L"Xbox PC/App" };
+
+static void ResolvePlatformLaunchPath(GamePlatform p, wchar_t* out, size_t cap) {
+    wcscpy_s(out, cap, g_gameLaunchPath);
+    const wchar_t* cand[3];
+    int n = 0;
+    switch (p) {
+        case PLAT_BATTLE:
+            cand[n++] = L"C:\\Program Files (x86)\\Call of Duty Modern Warfare II\\_retail_\\cod22-cod.exe";
+            break;
+        case PLAT_STEAM:
+            cand[n++] = L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Call of Duty HQ\\_retail_\\cod22-cod.exe";
+            cand[n++] = L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Call of Duty\\_retail_\\cod22-cod.exe";
+            break;
+        case PLAT_XBOX:
+            cand[n++] = L"C:\\XboxGames\\Call of Duty\\Content\\_retail_\\cod22-cod.exe";
+            cand[n++] = L"C:\\Program Files\\WindowsApps\\Call of Duty\\_retail_\\cod22-cod.exe";
+            break;
+    }
+    for (int i = 0; i < n; i++) {
+        if (GetFileAttributesW(cand[i]) != INVALID_FILE_ATTRIBUTES) {
+            wcscpy_s(out, cap, cand[i]);
+            return;
+        }
+    }
+}
+
 static bool LaunchGame() {
     wchar_t exe[MAX_PATH] = {};
-    wcscpy_s(exe, g_gameLaunchPath);
+    ResolvePlatformLaunchPath(g_platform, exe, MAX_PATH);
     if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return false;
 
     // Let the OS resolve the per-user Steam/Battle.net context so the game boots
@@ -518,42 +660,48 @@ DWORD WINAPI InjectThread(LPVOID) {
     g_working = true;
     g_injected = false;
 
-    // Fetch everything from GitHub into memory (no disk until mapped).
-    std::vector<BYTE> remoteDrv, kdmData, remoteDll;
-    bool haveDrvBytes  = DownloadToMemory(g_remoteDriverUrl, remoteDrv);
-    bool haveKdmapper  = DownloadToMemory(g_remoteKdmapperUrl, kdmData);
-    bool haveRemoteDll = DownloadToMemory(g_remoteDllUrl, remoteDll);
+    char platBuf[64];
+    sprintf_s(platBuf, "Platform: %ls", PlatformNames[g_platform]);
+    g_Debug->Log(std::string(platBuf));
+    wchar_t launchBuf[MAX_PATH];
+    ResolvePlatformLaunchPath(g_platform, launchBuf, MAX_PATH);
+    char lpBuf[MAX_PATH + 16];
+    sprintf_s(lpBuf, "Launch path: %ls", launchBuf);
+    g_Debug->Log(std::string(lpBuf));
 
-    // Local fallback: if the GitHub release isn't live yet, load the built
-    // artifacts straight from the repo so the whole flow still works offline.
-    if (!haveDrvBytes) {
+    // Load driver + kdmapper + client from LOCAL built artifacts first, then
+    // fall back to the public GitHub repo so a fresh machine only needs the
+    // loader exe.
+    std::vector<BYTE> remoteDrv, kdmData, remoteDll;
+    bool haveDrvBytes = false, haveKdmapper = false, haveRemoteDll = false;
+
+    {
         const char* p = FindExisting(
             "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Driver\\nxs_drv.sys",
             "..\\..\\..\\Driver\\nxs_drv.sys");
-        if (ReadFileToVector(p, remoteDrv)) {
+        if (AcquireFile(p, "Driver/nxs_drv.sys", remoteDrv, "driver")) {
             haveDrvBytes = true;
-            g_Debug->Log("Driver loaded from local: " + std::string(p));
         }
     }
-    if (!haveKdmapper) {
+    {
         const char* p = FindExisting(
             "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Tools\\kdmapper\\kdmapper.exe",
             "..\\..\\..\\Tools\\kdmapper\\kdmapper.exe");
-        if (ReadFileToVector(p, kdmData)) {
+        if (AcquireFile(p, "Tools/kdmapper/kdmapper.exe", kdmData, "kdmapper")) {
             haveKdmapper = true;
-            g_Debug->Log("kdmapper loaded from local: " + std::string(p));
         }
     }
 
     std::string dllPath;
-    if (haveRemoteDll) {
-        dllPath = "<remote>";
-    } else {
+    {
         const char* p = FindExisting(
             "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Client\\x64\\Release\\ZORClient.dll",
             "..\\..\\..\\Client\\x64\\Release\\ZORClient.dll",
             "ZORClient.dll");
         dllPath = p;
+        if (AcquireFile(dllPath.c_str(), "Client/x64/Release/ZORClient.dll", remoteDll, "client DLL")) {
+            haveRemoteDll = true;
+        }
     }
     const wchar_t* targetProcess = L"cod22-cod.exe";
 
@@ -583,7 +731,7 @@ DWORD WINAPI InjectThread(LPVOID) {
         if (haveDrvBytes) {
             droppedDriver = WriteHiddenTemp(remoteDrv, L".sys");
             if (droppedDriver.empty()) {
-                g_Debug->Log("[!] Remote driver write failed, falling back to local");
+                g_Debug->Log("[!] Driver temp write failed, falling back to local");
                 haveDrvBytes = false;
             }
         }
@@ -747,6 +895,73 @@ static Color StepColor(StepState s, bool& pulse) {
     return Color(200, 110, 110, 120);
 }
 
+// Soft radial glow (layered translucent ellipses -> cheap fake blur).
+static void DrawGlow(Graphics& g, float cx, float cy, float radius, const Color& col) {
+    const int layers = 5;
+    for (int i = layers; i >= 1; i--) {
+        float r = radius * ((float)i / (float)layers);
+        BYTE a = (BYTE)((col.GetAlpha() * (layers - i + 1)) / (layers * 2));
+        SolidBrush br(Color(a, col.GetR(), col.GetG(), col.GetB()));
+        g.FillEllipse(&br, cx - r, cy - r, r * 2.0f, r * 2.0f);
+    }
+}
+
+// Hollow progress ring.
+static void DrawRing(Graphics& g, float cx, float cy, float radius, float thick,
+    float start, float sweep, const Color& col) {
+    Pen pen(col, thick);
+    pen.SetStartCap(LineCapRound);
+    pen.SetEndCap(LineCapRound);
+    g.DrawArc(&pen, cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, start, sweep);
+}
+
+// Diagonal shimmer sweep used on the inject button.
+static void DrawShimmer(Graphics& g, const RectF& r, float phase) {
+    float x0 = r.X - r.Width + fmodf(phase, 1.0f) * (r.Width * 2.5f);
+    LinearGradientBrush sh(PointF(x0, r.Y), PointF(x0 + r.Width * 0.6f, r.Y + r.Height),
+        Color(60, 255, 255, 255), Color(0, 255, 255, 255));
+    GraphicsPath path;
+    float d = r.Height * 2.0f;
+    path.AddArc(r.X, r.Y, d, d, 180, 90);
+    path.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
+    path.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
+    path.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
+    path.CloseFigure();
+    g.FillPath(&sh, &path);
+}
+
+// Hexagonal emblem badge with a letter.
+static void DrawEmblem(Graphics& g, float cx, float cy, float size, const Color& edge,
+    const Color& fillTop, const Color& fillBot, wchar_t letter) {
+    PointF pts[6];
+    for (int i = 0; i < 6; i++) {
+        float ang = (float)(i * 60 - 90) * 3.14159265f / 180.0f;
+        pts[i].X = cx + cosf(ang) * size;
+        pts[i].Y = cy + sinf(ang) * size;
+    }
+    GraphicsPath hex;
+    hex.AddPolygon(pts, 6);
+    LinearGradientBrush fill(PointF(cx - size, cy - size), PointF(cx + size, cy + size), fillTop, fillBot);
+    g.FillPath(&fill, &hex);
+    Pen pen(edge, 1.8f);
+    g.DrawPath(&pen, &hex);
+
+    Gdiplus::FontFamily ff(L"Segoe UI");
+    Font fnt(&ff, size * 1.1f, FontStyleBold, UnitPixel);
+    RectF tr(cx - size, cy - size * 1.05f, size * 2.0f, size * 2.1f);
+    GText(g, &letter, fnt, tr, Color(255, 245, 245, 255), StringAlignmentCenter, StringAlignmentCenter);
+}
+
+// Status pills / badges.
+static void DrawPill(Graphics& g, const RectF& r, const Color& fill, const Color& border,
+    const wchar_t* txt, const Font& f, const Color& txtCol) {
+    FillRoundRect(g, r, r.Height / 2.0f, fill);
+    StrokeRoundRect(g, r, r.Height / 2.0f, border, 1.0f);
+    GText(g, txt, f, r, txtCol, StringAlignmentCenter, StringAlignmentCenter);
+}
+
+static const wchar_t* CardGlyphs[3] = { L"DRV", L"EXE", L"DLL" };
+
 // ============================================================================
 //  Window proc
 // ============================================================================
@@ -764,22 +979,28 @@ static void DrawScene(HWND hwnd) {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
 
-    // background gradient
+    // ---- background gradient + vignette ----
     RectF full(0, 0, (float)W, (float)H);
     LinearGradientBrush bg(Rect(0, 0, W, H), BG_TOP, BG_BOT, 90.0f);
     g.FillRectangle(&bg, full);
 
-    // ---- neon background: drifting glow orbs ----
+    // fine grid lines for depth
+    Pen gridPen(Color(24, 40, 60, 110), 1.0f);
+    for (int x = 24; x < W; x += 32) g.DrawLine(&gridPen, (float)x, 0.0f, (float)x, (float)H);
+    for (int y = 24; y < H; y += 32) g.DrawLine(&gridPen, 0.0f, (float)y, (float)W, (float)y);
+
+    // ---- drifting glow orbs ----
     struct Orb { float cx, cy, r; DWORD a; Color c; float sx, sy; };
-    Orb orbs[4] = {
-        { (float)W * 0.20f, (float)H * 0.18f, 240.0f, 70, NEON_PURPLE, 0.40f, 0.22f },
-        { (float)W * 0.78f, (float)H * 0.15f, 200.0f, 60, ACCENT,      0.55f, 0.30f },
-        { (float)W * 0.62f, (float)H * 0.80f, 260.0f, 55, NEON_PINK,   0.50f, 0.18f },
-        { (float)W * 0.35f, (float)H * 0.72f, 180.0f, 45, ACCENT,      0.35f, 0.40f },
+    Orb orbs[5] = {
+        { (float)W * 0.16f, (float)H * 0.14f, 300.0f, 55, NEON_PURPLE, 0.40f, 0.22f },
+        { (float)W * 0.82f, (float)H * 0.12f, 260.0f, 45, ACCENT,      0.55f, 0.30f },
+        { (float)W * 0.60f, (float)H * 0.85f, 320.0f, 40, NEON_PINK,   0.50f, 0.18f },
+        { (float)W * 0.30f, (float)H * 0.72f, 220.0f, 35, ACCENT,      0.35f, 0.40f },
+        { (float)W * 0.90f, (float)H * 0.55f, 240.0f, 40, NEON_PURPLE, 0.60f, 0.25f },
     };
-    for (int i = 0; i < 4; i++) {
-        float ox = orbs[i].cx + sinf(g_pulse * orbs[i].sx + i * 1.7f) * 60.0f;
-        float oy = orbs[i].cy + cosf(g_pulse * orbs[i].sy + i * 2.3f) * 40.0f;
+    for (int i = 0; i < 5; i++) {
+        float ox = orbs[i].cx + sinf(g_pulse * orbs[i].sx + i * 1.7f) * 70.0f;
+        float oy = orbs[i].cy + cosf(g_pulse * orbs[i].sy + i * 2.3f) * 50.0f;
         LinearGradientBrush orb(PointF(ox - orbs[i].r, oy - orbs[i].r),
             PointF(ox + orbs[i].r, oy + orbs[i].r),
             Color((BYTE)orbs[i].a, orbs[i].c.GetR(), orbs[i].c.GetG(), orbs[i].c.GetB()),
@@ -787,119 +1008,226 @@ static void DrawScene(HWND hwnd) {
         g.FillEllipse(&orb, RectF(ox - orbs[i].r, oy - orbs[i].r, orbs[i].r * 2.0f, orbs[i].r * 2.0f));
     }
 
-    // neon scanline sweep
-    float sweepY = fmodf(g_pulse * 140.0f, (float)H + 120.0f) - 60.0f;
-    LinearGradientBrush sweep(PointF(0, sweepY - 90.0f), PointF(0, sweepY + 90.0f),
-        Color(0, 255, 255, 255), Color(0, 255, 255, 255));
-    g.FillRectangle(&sweep, RectF(0, sweepY - 90.0f, (float)W, 180.0f));
+    // ---- rising particle motes ----
+    if (!g_particlesInit) {
+        std::mt19937 rng((unsigned)GetTickCount());
+        for (int i = 0; i < 28; i++) {
+            g_particles[i].x = (float)(rng() % W);
+            g_particles[i].y = (float)(rng() % H);
+            g_particles[i].r = 1.0f + (float)(rng() % 4) * 0.7f;
+            g_particles[i].speed = 12.0f + (float)(rng() % 40);
+            g_particles[i].drift = (float)(rng() % 30) - 15.0f;
+            g_particles[i].alpha = 30.0f + (float)(rng() % 70);
+        }
+        g_particlesInit = true;
+    }
+    for (int i = 0; i < 28; i++) {
+        g_particles[i].y -= g_particles[i].speed * 0.016f;
+        g_particles[i].x += sinf(g_pulse * 1.2f + i) * g_particles[i].drift * 0.01f;
+        if (g_particles[i].y < -10.0f) { g_particles[i].y = (float)H + 10.0f; g_particles[i].x = (float)(rand() % W); }
+        SolidBrush pb(Color((BYTE)g_particles[i].alpha, 140, 220, 255));
+        g.FillEllipse(&pb, g_particles[i].x, g_particles[i].y, g_particles[i].r * 2.0f, g_particles[i].r * 2.0f);
+    }
 
-    // top accent line
-    SolidBrush accentLine(ACCENT);
-    g.FillRectangle(&accentLine, RectF(0, 0, (float)W, 3.0f));
+    // neon scanline sweep (subtle)
+    float sweepY = fmodf(g_pulse * 90.0f, (float)H + 200.0f) - 100.0f;
+    LinearGradientBrush sweep(PointF(0, sweepY - 70.0f), PointF(0, sweepY + 70.0f),
+        Color(0, 255, 255, 255), Color(0, 255, 255, 255));
+    g.FillRectangle(&sweep, RectF(0, sweepY - 70.0f, (float)W, 140.0f));
+
+    // top accent gradient line
+    LinearGradientBrush topLine(RectF(0, 0, (float)W, 3), ACCENT, NEON_PINK, LinearGradientModeHorizontal);
+    g.FillRectangle(&topLine, RectF(0, 0, (float)W, 3.0f));
+
+    // ---- custom title bar (no native caption) ----
+    {
+        LinearGradientBrush tbFill(RectF(0, 0, (float)W, (float)TITLEBAR_H), Color(230, 10, 10, 26), Color(230, 20, 8, 40), LinearGradientModeHorizontal);
+        g.FillRectangle(&tbFill, RectF(0, 0, (float)W, (float)TITLEBAR_H));
+        SolidBrush tbLine(ACCENT);
+        g.FillRectangle(&tbLine, RectF(0, (float)TITLEBAR_H - 1, (float)W, 1.0f));
+        GText(g, L"ZOR Loader v8.0", *g_fontSmall, RectF(14, 7, 160, 20), TEXT_DIM);
+
+        // close (X) button on the right, drawn on the UI
+        float cx = (float)W - 34.0f;
+        RectF cb(cx, 6, 26, 22);
+        Color cbCol = g_closeHover ? (g_closeDown ? RED : Color(220, 240, 60, 80)) :
+            (g_closeHover ? Color(180, 240, 60, 80) : Color(80, 60, 60, 80));
+        FillRoundRect(g, cb, 6.0f, cbCol);
+        StrokeRoundRect(g, cb, 6.0f, g_closeHover ? RED : Color(100, 120, 0, 160), 1.0f);
+        Pen xp(Color(255, 235, 235, 240), 1.6f);
+        g.DrawLine(&xp, cx + 8.0f, 11.0f, cx + 18.0f, 21.0f);
+        g.DrawLine(&xp, cx + 18.0f, 11.0f, cx + 8.0f, 21.0f);
+    }
 
     // ---- header ----
-    GText(g, L"ZOR", *g_fontTitle, RectF(28, 22, 120, 44), ACCENT);
-    GText(g, L"LOADER v8.0", *g_fontSmall, RectF(28, 64, 160, 20), TEXT_DIM);
-    GText(g, L"the best cheat made by eddie", *g_fontNormal, RectF(28, 84, 320, 20), NEON_PINK);
-    GText(g, L"support: dc @spokenedwin // tg @spookyeddie", *g_fontSmall,
-        RectF(28, 108, 420, 16), TEXT_DIM);
+    DrawEmblem(g, 44.0f, 78.0f, 26.0f, ACCENT, Color(150, 0, 60, 140), Color(150, 120, 0, 255), L'Z');
 
-    // connection dot
-    Color dotCol = g_injected ? GREEN : ACCENT;
-    SolidBrush dotBr(dotCol);
-    float dotPulse = 5.0f + (g_injected ? 0 : sinf(g_pulse * 3.0f) * 1.5f);
-    g.FillEllipse(&dotBr, (float)W - 90.0f, 34.0f, dotPulse * 2.0f, dotPulse * 2.0f);
-    GText(g, g_injected ? L"ACTIVE" : L"READY", *g_fontSmall,
-        RectF((float)W - 70, 30, 60, 16), g_injected ? GREEN : ACCENT);
+    RectF titleR(78, 52, 200, 40);
+    // glow behind title
+    DrawGlow(g, 120, 74, 70, Color(70, 0, 229, 255));
+    GText(g, L"ZOR", *g_fontTitle, titleR, ACCENT);
+    GText(g, L"LOADER v8.0", *g_fontSmall, RectF(80, 92, 160, 18), TEXT_DIM);
+    GText(g, L"the best cheat made by eddie", *g_fontNormal, RectF(80, 112, 340, 20), NEON_PINK);
+
+    // support line: own full-width row, names highlighted
+    GText(g, L"support: dc ", *g_fontNormal, RectF(80, 136, 130, 20), TEXT_DIM);
+    GText(g, L"@spokenedwin", *g_fontNormal, RectF(186, 136, 130, 20), ACCENT);
+    GText(g, L" // tg ", *g_fontNormal, RectF(312, 136, 60, 20), TEXT_DIM);
+    GText(g, L"@spookyeddie", *g_fontNormal, RectF(366, 136, 130, 20), NEON_PINK);
+
+    // right-side status pill
+    {
+        float pillW = 130.0f, pillH = 30.0f;
+        RectF pill((float)W - pillW - 28, 68, pillW, pillH);
+        Color pc = g_injected ? GREEN : ACCENT;
+        DrawPill(g, pill, Color(60, 10, 10, 30), pc,
+            g_injected ? L"ACTIVE" : L"READY", *g_fontMono, pc);
+        float dotPulse = 4.0f + (g_injected ? 0 : sinf(g_pulse * 3.0f) * 1.5f);
+        SolidBrush dotBr(pc);
+        g.FillEllipse(&dotBr, pill.X - 8.0f - dotPulse, pill.Y + pillH / 2.0f - dotPulse,
+            dotPulse * 2.0f, dotPulse * 2.0f);
+    }
+
+    // ---- platform selector ----
+    float pillGap = 10.0f;
+    float pillW = (float)(W - 56 - pillGap * 2) / 3.0f;
+    float platY = 192.0f;
+    GText(g, L"GAMING PLATFORM //", *g_fontSmall, RectF(28, platY - 20, 200, 16), TEXT_DIM);
+    for (int i = 0; i < 3; i++) {
+        float px = 28.0f + i * (pillW + pillGap);
+        RectF pill(px, platY, pillW, 26.0f);
+        bool sel = (i == (int)g_platform);
+        bool hover = (i == g_platHover);
+        Color pc = sel ? ACCENT : (hover ? Color(120, 0, 160, 220) : CARD_BORDER);
+        FillRoundRect(g, pill, 8.0f, sel ? Color(140, 0, 40, 90) : (hover ? Color(120, 20, 30, 70) : CARD_BG));
+        StrokeRoundRect(g, pill, 8.0f, pc, sel ? 1.8f : 1.0f);
+        if (sel) DrawGlow(g, px + pillW / 2.0f, platY + 13.0f, pillW * 0.5f, Color(40, 0, 229, 255));
+        GText(g, PlatformNames[i], *g_fontSmall, pill, sel ? ACCENT : TEXT_DIM,
+            StringAlignmentCenter, StringAlignmentCenter);
+    }
 
     // ---- status cards ----
-    const wchar_t* icons[] = { L"SHIELD", L"GAME", L"INJECT" };
     float cardW = (float)((W - 56 - 24) / 3);
-    float cardY = 142.0f;
+    float cardY = 232.0f;
+    float cardH = 92.0f;
     for (int i = 0; i < 3; i++) {
         float x = 28.0f + i * (cardW + 12.0f);
-        RectF card(x, cardY, cardW, 92.0f);
-        FillRoundRect(g, card, 10.0f, CARD_BG);
-        StrokeRoundRect(g, card, 10.0f, CARD_BORDER, 1.0f);
+        RectF card(x, cardY, cardW, cardH);
 
-        bool pulse;
-        Color sc = StepColor(g_cards[i].state, pulse);
-        float cx = x + 22, cy = cardY + 24;
-        SolidBrush iconBr(sc);
-        g.FillEllipse(&iconBr, cx - 10.0f, cy - 10.0f, 20.0f, 20.0f);
-        GText(g, icons[i], *g_fontSmall, RectF(cx - 8, cy - 7, 60, 14), Color(255, 20, 20, 28), StringAlignmentNear);
+        // glow when active
+        bool pulse; Color sc = StepColor(g_cards[i].state, pulse);
+        if (g_cards[i].state == ST_ACTIVE) DrawGlow(g, x + cardW / 2.0f, cardY + cardH / 2.0f, cardW * 0.6f, Color(40, 0, 229, 255));
 
-        GText(g, g_cards[i].title, *g_fontNormal, RectF(x + 44, cardY + 14, cardW - 50, 20), TEXT_MAIN);
-        GText(g, g_cards[i].detail, *g_fontSmall, RectF(x + 44, cardY + 38, cardW - 50, 18), sc);
+        FillRoundRect(g, card, 12.0f, CARD_BG);
+        StrokeRoundRect(g, card, 12.0f, CARD_BORDER, 1.0f);
 
-        // bottom indicator
+        // top thin accent per card
+        FillRoundRect(g, RectF(x + 8, cardY + 8, cardW - 16, 2.0f), 1.0f, sc);
+
+        // glyph chip
+        float cx = x + 24, cy = cardY + 34;
+        DrawGlow(g, cx, cy, 16.0f, Color(60, 0, 229, 255));
+        FillRoundRect(g, RectF(cx - 16, cy - 16, 32, 32), 8.0f, Color(200, 16, 16, 40));
+        StrokeRoundRect(g, RectF(cx - 16, cy - 16, 32, 32), 8.0f, sc, 1.0f);
+        GText(g, CardGlyphs[i], *g_fontSmall, RectF(cx - 16, cy - 9, 32, 16), sc, StringAlignmentCenter, StringAlignmentCenter);
+
+        GText(g, g_cards[i].title, *g_fontNormal, RectF(x + 50, cardY + 18, cardW - 60, 20), TEXT_MAIN);
+        GText(g, g_cards[i].detail, *g_fontSmall, RectF(x + 50, cardY + 44, cardW - 60, 18), sc);
+
+        // bottom progress / state
         if (g_cards[i].state == ST_ACTIVE) {
             float prog = fmodf(g_pulse, 1.0f);
-            FillRoundRect(g, RectF(x + 12, cardY + 78, (cardW - 24) * prog, 3.0f), 1.5f, ACCENT);
+            FillRoundRect(g, RectF(x + 12, cardY + cardH - 14, (cardW - 24) * prog, 4.0f), 2.0f, ACCENT);
         } else if (g_cards[i].state == ST_OK) {
-            FillRoundRect(g, RectF(x + 12, cardY + 78, cardW - 24, 3.0f), 1.5f, GREEN);
+            FillRoundRect(g, RectF(x + 12, cardY + cardH - 14, cardW - 24, 4.0f), 2.0f, GREEN);
+        } else if (g_cards[i].state == ST_FAIL) {
+            FillRoundRect(g, RectF(x + 12, cardY + cardH - 14, cardW - 24, 4.0f), 2.0f, RED);
         }
     }
 
     // ---- big inject button ----
-    float btnW = 300.0f, btnH = 64.0f;
-    float btnX = (float)(W - btnW) / 2.0f, btnY = 248.0f;
+    float btnW = 340.0f, btnH = 70.0f;
+    float btnX = (float)(W - btnW) / 2.0f, btnY = 334.0f;
     RectF btn(btnX, btnY, btnW, btnH);
-    if (g_btnHover) {
-        FillRoundRect(g, btn, 14.0f, Color(220, 60, 110, 255));
-        if (g_btnDown) FillRoundRect(g, btn, 14.0f, Color(255, 40, 90, 220));
-    } else {
-        FillRoundRect(g, btn, 14.0f, Color(200, 24, 40, 90));
-    }
-    StrokeRoundRect(g, btn, 14.0f, g_btnHover ? ACCENT : Color(150, 0, 229, 255), 1.5f);
+
+    // outer glow
+    Color glowCol = g_injected ? GREEN : (g_btnHover ? ACCENT : Color(120, 0, 160, 220));
+    DrawGlow(g, btnX + btnW / 2.0f, btnY + btnH / 2.0f, btnW * 0.7f, Color(60, glowCol.GetR(), glowCol.GetG(), glowCol.GetB()));
+
+    // body gradient
+    LinearGradientBrush btnFill(PointF(btnX, btnY), PointF(btnX + btnW, btnY + btnH),
+        g_btnHover ? Color(240, 20, 50, 130) : Color(210, 16, 32, 96),
+        g_btnHover ? Color(240, 60, 0, 200) : Color(210, 40, 10, 160));
+    GraphicsPath btnPath;
+    float bd = btnH * 2.0f;
+    btnPath.AddArc(btnX, btnY, bd, bd, 180, 90);
+    btnPath.AddArc(btnX + btnW - bd, btnY, bd, bd, 270, 90);
+    btnPath.AddArc(btnX + btnW - bd, btnY + btnH - bd, bd, bd, 0, 90);
+    btnPath.AddArc(btnX, btnY + btnH - bd, bd, bd, 90, 90);
+    btnPath.CloseFigure();
+    g.FillPath(&btnFill, &btnPath);
+
+    // shimmer when idle / working
+    if (!g_injected) DrawShimmer(g, btn, g_pulse * 0.6f);
+
+    Pen btnPen(glowCol, 1.6f);
+    g.DrawPath(&btnPen, &btnPath);
 
     if (g_working) {
-        // animated progress bar inside button
-        float pw = fmodf(g_pulse, 1.0f);
-        FillRoundRect(g, RectF(btnX + 8, btnY + 8, (btnW - 16) * pw, btnH - 16), 10.0f, Color(120, 0, 229, 255));
+        // animated ring around button
+        DrawRing(g, btnX + btnW / 2.0f, btnY + btnH / 2.0f, btnH / 2.0f + 8.0f, 2.5f, -90.0f,
+            fmodf(g_pulse, 1.0f) * 360.0f, ACCENT);
         GText(g, L"WORKING...", *g_fontBig, btn, Color(255, 255, 255, 255), StringAlignmentCenter);
     } else if (g_injected) {
+        DrawGlow(g, btnX + btnW / 2.0f, btnY + btnH / 2.0f, 60.0f, Color(80, 60, 220, 110));
         GText(g, L"INJECTED", *g_fontBig, btn, GREEN, StringAlignmentCenter);
     } else {
         GText(g, L"INJECT", *g_fontBig, btn, g_btnHover ? Color(255, 255, 255, 255) : TEXT_MAIN, StringAlignmentCenter);
     }
 
     // ---- log panel ----
-    float logY = 336.0f;
-    RectF logBox(28, logY, (float)(W - 56), (float)(H - logY - 30));
-    FillRoundRect(g, logBox, 10.0f, Color(190, 18, 18, 28));
-    StrokeRoundRect(g, logBox, 10.0f, CARD_BORDER, 1.0f);
-    GText(g, L"CONSOLE", *g_fontSmall, RectF(40, logY + 8, 100, 16), TEXT_DIM);
+    float logY = 420.0f;
+    RectF logBox(28, logY, (float)(W - 56), (float)(H - logY - 28));
+    FillRoundRect(g, logBox, 12.0f, Color(200, 14, 14, 26));
+    StrokeRoundRect(g, logBox, 12.0f, CARD_BORDER, 1.0f);
+
+    // console header bar
+    FillRoundRect(g, RectF(28, logY, (float)(W - 56), 30.0f), 12.0f, Color(220, 8, 8, 20));
+    GText(g, L"CONSOLE", *g_fontSmall, RectF(40, logY + 5, 100, 18), TEXT_DIM);
+    GText(g, L"// LIVE FEED", *g_fontMono, RectF(118, logY + 5, 120, 18), ACCENT);
 
     // COPY button (top-right of console panel)
     {
-        RectF copyBtn(logBox.GetRight() - 86.0f, logY + 6.0f, 64.0f, 20.0f);
+        RectF copyBtn(logBox.GetRight() - 86.0f, logY + 5.0f, 64.0f, 20.0f);
         FillRoundRect(g, copyBtn, 6.0f, g_copyDown ? Color(220, 0, 229, 255) :
             (g_copyHover ? Color(160, 40, 90, 200) : Color(120, 24, 40, 90)));
         StrokeRoundRect(g, copyBtn, 6.0f, g_copyHover ? ACCENT : Color(100, 0, 160, 200), 1.0f);
-        GText(g, L"COPY", *g_fontSmall, copyBtn, g_copyHover ? Color(255, 255, 255, 255) : TEXT_DIM,
+        GText(g, L"COPY", *g_fontMono, copyBtn, g_copyHover ? Color(255, 255, 255, 255) : TEXT_DIM,
             StringAlignmentCenter, StringAlignmentCenter);
     }
 
     // log lines (scrolled to bottom)
     EnterCriticalSection(&g_logLock);
     int n = (int)g_log.size();
-    int maxLines = (int)((logBox.Height - 34) / 16.0f);
-    int start = (n > maxLines) ? n - maxLines : 0;
+    float textTop = logY + 36.0f;
+    float maxLines = (logBox.Height - 40.0f) / 16.0f;
+    int start = (n > (int)maxLines) ? n - (int)maxLines : 0;
     for (int i = start; i < n; i++) {
-        float ly = logY + 30.0f + (float)(i - start) * 16.0f;
+        float ly = textTop + (float)(i - start) * 16.0f;
         const std::wstring& line = g_log[i];
         Color lc = TEXT_DIM;
         if (line.find(L"[+]") != std::wstring::npos) lc = GREEN;
         else if (line.find(L"[!]") != std::wstring::npos) lc = YELLOW;
         else if (line.find(L"[ERROR]") != std::wstring::npos) lc = RED;
         else if (line.find(L"ZOR injected") != std::wstring::npos || line.find(L"ALL DONE") != std::wstring::npos) lc = ACCENT;
-        GText(g, line.c_str(), *g_fontSmall, RectF(40, ly, logBox.Width - 24, 16), lc);
+        GText(g, line.c_str(), *g_fontMono, RectF(40, ly, logBox.Width - 24, 16), lc);
     }
     LeaveCriticalSection(&g_logLock);
 
     // watermark
     GText(g, L"ZOR // system v8 // eddie", *g_fontSmall, RectF(28, (float)(H - 22), 220, 16), Color(130, 0, 160, 200));
+    GText(g, L"BYOVD READY", *g_fontMono, RectF((float)(W - 150), (float)(H - 22), 130, 16),
+        Color(130, 0, 160, 200), StringAlignmentFar);
 
     // blit
     Graphics mb(memDC);
@@ -926,21 +1254,61 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSEMOVE: {
             RECT rc; GetClientRect(hwnd, &rc);
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-            float btnX = (float)(rc.right - 300) / 2.0f;
-            bool hover = (pt.x >= btnX && pt.x <= btnX + 300 && pt.y >= 248 && pt.y <= 248 + 64);
+            float btnW = 340.0f, btnH = 70.0f;
+            float btnX = (float)(rc.right - btnW) / 2.0f, btnY = 334.0f;
+            bool hover = (pt.x >= btnX && pt.x <= btnX + btnW && pt.y >= btnY && pt.y <= btnY + btnH);
             if (hover != g_btnHover) { g_btnHover = hover; InvalidateRect(hwnd, NULL, FALSE); }
-            // COPY button: (right - 58 .. right - 22) x (logY+6 .. logY+26)
-            float logY = 336.0f;
+            // platform pills: y = 192..218, 3 across
+            float pillGap = 10.0f;
+            float pillW = (float)(rc.right - 56 - pillGap * 2) / 3.0f;
+            int ph = -1;
+            for (int i = 0; i < 3; i++) {
+                float px = 28.0f + i * (pillW + pillGap);
+                if (pt.x >= px && pt.x <= px + pillW && pt.y >= 192 && pt.y <= 218) { ph = i; break; }
+            }
+            if (ph != g_platHover) { g_platHover = ph; InvalidateRect(hwnd, NULL, FALSE); }
+            // close (X) button: right-34 .. right-8, y 6..28
+            bool clHover = (pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28);
+            if (clHover != g_closeHover) { g_closeHover = clHover; InvalidateRect(hwnd, NULL, FALSE); }
+            // COPY button: (right - 58 .. right - 22) x (logY+5 .. logY+25)
+            float logY = 420.0f;
             bool cHover = (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
-                           pt.y >= logY + 6 && pt.y <= logY + 26);
+                           pt.y >= logY + 5 && pt.y <= logY + 25);
             if (cHover != g_copyHover) { g_copyHover = cHover; InvalidateRect(hwnd, NULL, FALSE); }
             return 0;
         }
         case WM_LBUTTONDOWN: {
             RECT rc; GetClientRect(hwnd, &rc);
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-            float btnX = (float)(rc.right - 300) / 2.0f;
-            if (pt.x >= btnX && pt.x <= btnX + 300 && pt.y >= 248 && pt.y <= 248 + 64) {
+            // close (X) button
+            if (pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28) {
+                g_closeDown = true;
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            // title bar drag
+            if (pt.y < TITLEBAR_H) {
+                ReleaseCapture();
+                SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+                return 0;
+            }
+            // platform selection
+            {
+                float pillGap = 10.0f;
+                float pillW = (float)(rc.right - 56 - pillGap * 2) / 3.0f;
+                for (int i = 0; i < 3; i++) {
+                    float px = 28.0f + i * (pillW + pillGap);
+                    if (pt.x >= px && pt.x <= px + pillW && pt.y >= 192 && pt.y <= 218) {
+                        g_platDown = i;
+                        g_platform = (GamePlatform)i;
+                        InvalidateRect(hwnd, NULL, FALSE);
+                        break;
+                    }
+                }
+            }
+            float btnW = 340.0f, btnH = 70.0f;
+            float btnX = (float)(rc.right - btnW) / 2.0f, btnY = 334.0f;
+            if (pt.x >= btnX && pt.x <= btnX + btnW && pt.y >= btnY && pt.y <= btnY + btnH) {
                 g_btnDown = true;
                 if (!g_working && !g_injected) {
                     HANDLE th = CreateThread(NULL, 0, InjectThread, NULL, 0, NULL);
@@ -948,9 +1316,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 InvalidateRect(hwnd, NULL, FALSE);
             }
-            float logY = 336.0f;
+            float logY = 420.0f;
             if (pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
-                pt.y >= logY + 6 && pt.y <= logY + 26) {
+                pt.y >= logY + 5 && pt.y <= logY + 25) {
                 g_copyDown = true;
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -959,12 +1327,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_LBUTTONUP: {
             RECT rc; GetClientRect(hwnd, &rc);
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-            float logY = 336.0f;
+            float logY = 420.0f;
             bool wasCopyDown = g_copyDown;
+            bool wasCloseDown = g_closeDown;
             g_copyDown = false;
             g_btnDown = false;
+            g_platDown = -1;
+            g_closeDown = false;
+            if (wasCloseDown && pt.x >= rc.right - 34 && pt.x <= rc.right - 8 && pt.y >= 6 && pt.y <= 28) {
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
             if (wasCopyDown && pt.x >= rc.right - 58 && pt.x <= rc.right - 22 &&
-                pt.y >= logY + 6 && pt.y <= logY + 26) {
+                pt.y >= logY + 5 && pt.y <= logY + 25) {
                 CopyConsoleToClipboard(hwnd);
             }
             InvalidateRect(hwnd, NULL, FALSE);
@@ -1010,6 +1384,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
     g_fontBig = new Font(&segoe, 26.0f, FontStyleBold, UnitPixel);
     g_fontNormal = new Font(&segoe, 16.0f, FontStyleBold, UnitPixel);
     g_fontSmall = new Font(&consolas, 14.0f, FontStyleRegular, UnitPixel);
+    g_fontMono = new Font(&consolas, 12.0f, FontStyleRegular, UnitPixel);
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(WNDCLASSEXW);
@@ -1023,10 +1398,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
     RegisterClassExW(&wc);
 
     RECT wr = { 0, 0, WIN_W, WIN_H };
-    AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    AdjustWindowRect(&wr, WS_POPUP, FALSE);
 
     HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, g_fakeName.c_str(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_POPUP,
         CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
         NULL, NULL, hInst, NULL);
     if (!hwnd) {

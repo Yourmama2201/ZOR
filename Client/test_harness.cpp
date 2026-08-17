@@ -104,7 +104,7 @@ bool  g_soundESPEnabled = false, g_soundESPFootsteps = true, g_soundESPGunshots 
 
 bool g_menuOpen = true;
 bool g_sessionTimerEnabled = false;
-float g_menuAccentR = 0.95f, g_menuAccentG = 0.35f, g_menuAccentB = 0.00f;
+float g_menuAccentR = 0.00f, g_menuAccentG = 0.85f, g_menuAccentB = 1.00f;
 
 char g_customNameBuf[32] = "nxs_USER";
 char g_clanTagBuf[16] = "YK";
@@ -349,10 +349,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
       if (dbg) { fprintf(dbg, "imgui inited\n"); fclose(dbg); } }
 
     // load emoji font like the real cheat
-    ImFontConfig baseCfg; baseCfg.SizePixels = 13.0f;
-    ImGui::GetIO().Fonts->AddFontDefault(&baseCfg);
-    ImFontConfig cfg; cfg.MergeMode = true; cfg.GlyphOffset.y = 4.0f; cfg.SizePixels = 13.0f;
-    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguiemj.ttf", 13.0f, &cfg);
+    ImFontConfig baseCfg; baseCfg.SizePixels = 16.0f;
+    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &baseCfg);
+    ImFontConfig cfg; cfg.MergeMode = true; cfg.GlyphOffset.y = 4.0f; cfg.SizePixels = 16.0f;
+    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguiemj.ttf", 16.0f, &cfg);
     { FILE* dbg = nullptr; fopen_s(&dbg, "C:\\Users\\Admin\\Desktop\\DMZ_FILES\\Client\\harness_dbg.txt", "a");
       if (dbg) { fprintf(dbg, "fonts loaded\n"); fclose(dbg); } }
 
@@ -389,7 +389,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         &g_radarEnabled,&g_radarRotate,&g_radarRange,&g_radarSize,&g_radarOpacity,
         &g_radarShowEnemies,&g_radarShowTeammates,&g_radarShowVehicles,&g_radarShowAI,
         &g_bhopEnabled,&g_jumpSpam,&g_superSlide,&g_superStrafe,&g_airStrafing,
-        &g_antiAimEnabled,&g_antiAimMode,&g_spinSpeed,&g_jitterRange,&g_antiAimOnFire,
+        &g_antiAimEnabled,&g_antiAimMode,&g_spinSpeed,&g_jitterRange,
         &g_thirdPerson,&g_thirdPersonDist,&g_fovChanger,&g_customFOV,
         &g_nightVision,&g_thermalVision,&g_freeCam,
         &g_stealthEnabled,&g_antiDebug,&g_blacklistScan,
@@ -398,7 +398,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         &g_playerListOpen,
         &g_vehicleSpeedBoost,&g_vehicleGodMode,&g_vehicleSpeedMult,
         &g_nameSpoofEnabled,&g_bypassProfanity,g_customNameBuf,g_clanTagBuf,
-        &g_nameRotatorEnabled,
         &g_spectatorEnabled,&g_spectatorAutoCloak,
         &g_accountHealthEnabled,
         &g_lootFilterEnabled,&g_autoPickupEnabled,

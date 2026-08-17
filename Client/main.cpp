@@ -252,10 +252,10 @@ void UpdateVehicles() {
 }
 
 void SetupImGui() { IMGUI_CHECKVERSION(); ImGui::CreateContext(); ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
-    ImFontConfig baseCfg; baseCfg.SizePixels = 13.0f;
-    ImGui::GetIO().Fonts->AddFontDefault(&baseCfg);
-    ImFontConfig cfg; cfg.MergeMode = true; cfg.GlyphOffset.y = 4.0f; cfg.SizePixels = 13.0f;
-    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguiemj.ttf", 13.0f, &cfg);
+    ImFontConfig baseCfg; baseCfg.SizePixels = 16.0f;
+    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &baseCfg);
+    ImFontConfig cfg; cfg.MergeMode = true; cfg.GlyphOffset.y = 4.0f; cfg.SizePixels = 16.0f;
+    ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguiemj.ttf", 16.0f, &cfg);
     g_menu->Setup(); ImGui_ImplWin32_Init(g_gameWindow); ImGui_ImplDX11_Init(g_pd3dDevice,g_pd3dDeviceContext); }
 
 void SaveConfig() {
@@ -367,7 +367,7 @@ void LoadConfig() {
     g_soundESPEnabled=b("sESP",0); g_soundESPFootsteps=b("sESPF",1); g_soundESPGunshots=b("sESPG",1);
     g_soundESPExplosions=b("sESPE",1); g_soundESPVehicles=b("sESPV",1);
     g_sessionTimerEnabled=b("sessTimer",0);
-    g_menuAccentR=f("accentR",0.95f); g_menuAccentG=f("accentG",0.35f); g_menuAccentB=f("accentB",0.00f);
+    g_menuAccentR=f("accentR",0.00f); g_menuAccentG=f("accentG",0.85f); g_menuAccentB=f("accentB",1.00f);
     std::string nm = st("spoofname", "nxs_USER");
     if (!nm.empty()) strncpy_s(g_customNameBuf, nm.c_str(), sizeof(g_customNameBuf));
     std::string ct = st("clantag", "YK");
@@ -772,8 +772,14 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) { DisableThreadLibraryCalls(hModule);
-        HANDLE hThread = CreateThread(NULL, 0, MainThread, hModule, 0, NULL);
-        if (hThread) CloseHandle(hThread); }
+    // No thread creation here: Ricochet hooks NtCreateThreadEx. The driver
+    // calls ZorMain() directly on the hijacked game thread instead.
+    if (reason == DLL_PROCESS_ATTACH) { /* CRT init only */ }
     return TRUE;
+}
+
+// Entry point for the kernel manual-mapper: runs the whole cheat on the
+// hijacked game thread, never returns.
+extern "C" __declspec(dllexport) void ZorMain() {
+    MainThread(0);
 }

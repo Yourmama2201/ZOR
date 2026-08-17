@@ -12,16 +12,15 @@
 #include "player.hpp"
 #include "offsets.hpp"
 #include "memory.hpp"
+#include "menu_style.hpp"
+#include "menu_widgets.hpp"
 #include "Features/Exploits/camo_changer.hpp"
 
 static std::mt19937 g_rng(std::random_device{}());
 
-struct Particle { ImVec2 pos, vel; float life, maxLife, size; ImColor color; };
-
 class Menu {
 private:
     bool open; int activeTab; float openAnim, tabAnim, time;
-    std::vector<Particle> particles; float particleTimer;
     std::unordered_map<std::string, bool> sectionOpen;
     char searchBuf[64];
     ImVec4 accent;
@@ -125,85 +124,15 @@ private:
     std::function<void(const char*)> onLoadProfile, onSaveProfile, onDeleteProfile;
     std::function<const char*()> onCurrentProfile;
 
-    void ApplyStyle() {
-        ImGuiStyle& s = ImGui::GetStyle();
-        s.WindowRounding = 12.0f; s.FrameRounding = 8.0f; s.GrabRounding = 8.0f;
-        s.PopupRounding = 8.0f; s.ScrollbarRounding = 8.0f; s.ChildRounding = 8.0f;
-        s.WindowTitleAlign = ImVec2(0.5f, 0.5f); s.FramePadding = ImVec2(10, 5);
-        s.ItemSpacing = ImVec2(10, 6); s.WindowPadding = ImVec2(14, 14);
-        s.ScrollbarSize = 10.0f; s.GrabMinSize = 8.0f;
-
-        ImVec4 a(accent.x, accent.y, accent.z, 1.0f), aH(accent.x, accent.y, accent.z, 0.80f);
-        ImVec4* c = s.Colors;
-        c[ImGuiCol_WindowBg] = ImVec4(0.06f,0.06f,0.10f,0.95f);
-        c[ImGuiCol_ChildBg] = ImVec4(0.08f,0.08f,0.12f,0.80f);
-        c[ImGuiCol_PopupBg] = ImVec4(0.08f,0.08f,0.12f,0.95f);
-        c[ImGuiCol_ScrollbarBg] = ImVec4(0.08f,0.08f,0.12f,0.60f);
-        c[ImGuiCol_ScrollbarGrab] = a; c[ImGuiCol_ScrollbarGrabHovered] = aH; c[ImGuiCol_ScrollbarGrabActive] = a;
-        c[ImGuiCol_CheckMark] = ImVec4(0.00f,0.85f,0.20f,1.00f);
-        c[ImGuiCol_SliderGrab] = a; c[ImGuiCol_SliderGrabActive] = a;
-        c[ImGuiCol_Button] = ImVec4(0.15f,0.15f,0.22f,0.80f);
-        c[ImGuiCol_ButtonHovered] = ImVec4(accent.x,accent.y,accent.z,0.30f);
-        c[ImGuiCol_ButtonActive] = ImVec4(accent.x,accent.y,accent.z,0.50f);
-        c[ImGuiCol_Header] = ImVec4(accent.x,accent.y,accent.z,0.25f);
-        c[ImGuiCol_HeaderHovered] = ImVec4(accent.x,accent.y,accent.z,0.40f);
-        c[ImGuiCol_HeaderActive] = ImVec4(accent.x,accent.y,accent.z,0.60f);
-        c[ImGuiCol_Tab] = ImVec4(0.10f,0.10f,0.15f,0.85f);
-        c[ImGuiCol_TabHovered] = ImVec4(accent.x,accent.y,accent.z,0.25f);
-        c[ImGuiCol_TabActive] = ImVec4(accent.x,accent.y,accent.z,0.35f);
-        c[ImGuiCol_Text] = ImVec4(0.92f,0.92f,0.96f,1.00f);
-        c[ImGuiCol_TextDisabled] = ImVec4(0.50f,0.50f,0.55f,1.00f);
-        c[ImGuiCol_Separator] = ImVec4(0.20f,0.20f,0.28f,0.60f);
-        c[ImGuiCol_Border] = ImVec4(0.20f,0.20f,0.28f,0.50f);
-        c[ImGuiCol_FrameBg] = ImVec4(0.10f,0.10f,0.16f,0.80f);
-        c[ImGuiCol_FrameBgHovered] = ImVec4(0.15f,0.15f,0.22f,0.80f);
-        c[ImGuiCol_FrameBgActive] = ImVec4(0.18f,0.18f,0.26f,0.80f);
-        c[ImGuiCol_PlotHistogram] = a;
-    }
+    void ApplyStyle() { MenuUI::ApplyStyle(accent); }
 
     void TabBtn(const char* label, const char* icon, int idx, int count) {
         bool sel = idx == activeTab;
-        std::string full = std::string(icon) + " " + label;
-        float w = ImGui::GetContentRegionAvail().x / count;
-        ImColor bg = sel ? ImColor(accent.x,accent.y,accent.z,0.28f) : ImColor(0.0f,0.0f,0.0f,0.0f);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)bg);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor(accent.x,accent.y,accent.z,0.20f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor(accent.x,accent.y,accent.z,0.32f));
-        if (ImGui::Button(full.c_str(), ImVec2(w, 34))) { activeTab = idx; tabAnim = 0; }
-        ImGui::PopStyleColor(3);
-        if (idx < count - 1) ImGui::SameLine();
-        ImDrawList* d = ImGui::GetWindowDrawList();
-        ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
-        if (sel) {
-            d->AddRectFilled(ImVec2(mn.x+2,mx.y-2), ImVec2(mx.x-2,mx.y), ImColor(accent.x,accent.y,accent.z,0.95f), 1.0f);
-            d->AddRect(ImVec2(mn.x,mn.y), ImVec2(mx.x,mx.y), ImColor(accent.x,accent.y,accent.z,0.15f), 3.0f);
-        }
+        if (MenuUI::SidebarTab(accent, sel, label, icon, idx, count)) { activeTab = idx; tabAnim = 0; }
     }
 
-    void Sec(const char* l) {
-        ImGui::Spacing();
-        ImDrawList* d = ImGui::GetWindowDrawList();
-        ImVec2 c = ImGui::GetCursorScreenPos();
-        float w = ImGui::GetContentRegionAvail().x;
-        d->AddRectFilled(c, ImVec2(c.x+3, c.y+16), ImColor(accent.x,accent.y,accent.z,0.95f), 1.0f);
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+8);
-        ImGui::TextColored(ImVec4(accent.x,accent.y,accent.z,0.95f), l);
-        ImGui::Separator();
-    }
-    bool Sub(const char* l) {
-        auto it = sectionOpen.find(l);
-        if (it == sectionOpen.end()) it = sectionOpen.emplace(l, true).first;
-        bool* openPtr = &it->second;
-        ImGui::TextColored(ImVec4(0.70f,0.70f,0.80f,1.00f), l);
-        ImGui::SameLine();
-        ImGui::TextDisabled(*openPtr ? "[ - ]" : "[ + ]");
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 24);
-        ImGui::InvisibleButton(("##sub_"+std::string(l)).c_str(), ImVec2(20, 14));
-        if (ImGui::IsItemClicked(0)) *openPtr = !*openPtr;
-        bool open = *openPtr;
-        if (open) ImGui::Indent(10.0f);
-        return open;
-    }
+    void Sec(const char* l) { MenuUI::Sec(accent, l); }
+    bool Sub(const char* l) { return MenuUI::Sub(accent, l, sectionOpen); }
     void End(bool open = true) { if (open) ImGui::Unindent(10.0f); ImGui::Spacing(); }
     void T(const char* l, bool* v, const char* tip = nullptr) {
         Switch(l, v);
@@ -220,25 +149,7 @@ private:
         return "Unknown";
     }
     // Colored switch/pill toggle instead of a plain checkbox
-    void Switch(const char* l, bool* v) {
-        ImGui::PushID(l);
-        float x = ImGui::GetCursorPosX();
-        ImVec2 sz(28, 16);
-        bool on = *v;
-        ImVec2 mn = ImGui::GetCursorScreenPos();
-        ImDrawList* d = ImGui::GetWindowDrawList();
-        ImU32 track = on ? ImGui::ColorConvertFloat4ToU32(ImVec4(accent.x,accent.y,accent.z,0.85f))
-                         : ImGui::ColorConvertFloat4ToU32(ImVec4(0.18f,0.18f,0.26f,0.95f));
-        d->AddRectFilled(mn, ImVec2(mn.x+sz.x, mn.y+sz.y), track, 8.0f);
-        float pad = 2.0f, k = sz.y - pad*2;
-        ImVec2 kb = on ? ImVec2(mn.x+sz.x-pad-k, mn.y+pad) : ImVec2(mn.x+pad, mn.y+pad);
-        d->AddCircleFilled(ImVec2(kb.x+k/2, kb.y+k/2), k/2, ImGui::ColorConvertFloat4ToU32(ImVec4(1,1,1,0.95f)));
-        ImGui::InvisibleButton("", sz);
-        if (ImGui::IsItemClicked(0)) *v = !*v;
-        ImGui::PopID();
-        ImGui::SameLine();
-        ImGui::TextUnformatted(l);
-    }
+    void Switch(const char* l, bool* v) { MenuUI::Switch(accent, l, v); }
 
     void TabAimbot() {
         if (Sub("Aimbot")) {
@@ -499,7 +410,7 @@ private:
             if (accentR && accentG && accentB) {
                 ImGui::ColorEdit3("##accent", &accent.x, ImGuiColorEditFlags_NoInputs);
                 if (*accentR != accent.x || *accentG != accent.y || *accentB != accent.z) { *accentR = accent.x; *accentG = accent.y; *accentB = accent.z; ApplyStyle(); }
-                if (ImGui::Button("Reset Accent", ImVec2(140, 24))) { accent = ImVec4(0.95f,0.35f,0.00f,1.0f); *accentR = accent.x; *accentG = accent.y; *accentB = accent.z; ApplyStyle(); }
+                if (ImGui::Button("Reset Accent", ImVec2(140, 24))) { accent = ImVec4(0.00f,0.85f,1.00f,1.0f); *accentR = accent.x; *accentG = accent.y; *accentB = accent.z; ApplyStyle(); }
             }
             End();
         }
@@ -557,8 +468,8 @@ private:
 public:
     void SetPlayerData(const std::vector<Player>* players, int team) { playersRef = players; localTeam = team; }
 
-    Menu() : open(true), activeTab(0), openAnim(1.0f), tabAnim(0), time(0), particleTimer(0), keybindEditorOpen(false),
-        searchBuf{0}, accent(0.95f,0.35f,0.00f,1.0f), accentR(nullptr), accentG(nullptr), accentB(nullptr) {}
+    Menu() : open(true), activeTab(0), openAnim(1.0f), tabAnim(0), time(0), keybindEditorOpen(false),
+        searchBuf{0}, accent(0.00f,0.85f,1.00f,1.0f), accentR(nullptr), accentG(nullptr), accentB(nullptr) {}
 
     void Setup() { ApplyStyle(); }
 
@@ -661,54 +572,84 @@ public:
         // FOV circle now handled by FOVRenderer
     }
 
-    void RenderSearch() {
-        ImGui::SetCursorPos(ImVec2(6, 120));
+    int Render(bool* menuOpen, const std::string& status, int pc, int vc, int lh, int la) {
+        if (!open) return activeTab;
+        time += ImGui::GetIO().DeltaTime;
+
+        float dspX = ImGui::GetIO().DisplaySize.x, dspY = ImGui::GetIO().DisplaySize.y;
+        float winW = 700.0f, winH = 510.0f;
+        if (dspX > 0 && dspY > 0) {
+            winW = (dspX < 720) ? dspX - 16 : 700.0f;
+            winH = (dspY < 530) ? dspY - 16 : 510.0f;
+        }
+        ImGui::SetNextWindowSizeConstraints(ImVec2(winW - 40, winH - 30), ImVec2(winW, winH));
+        ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_FirstUseEver);
+        ImGui::Begin("ZORMenu v4.0", menuOpen,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        ImVec2 wPos = ImGui::GetWindowPos(), wSize = ImGui::GetWindowSize();
+
+        // ---- header ----
+        bool connected = status.find("Connected") != std::string::npos;
+        MenuUI::DrawHeader(draw, wPos, wSize, accent, time, connected, pc, vc, lh, la);
+
+        // ---- sidebar nav ----
+        const float sbW = 150.0f;
+        ImGui::SetCursorPos(ImVec2(8, 56)); ImGui::BeginGroup();
+        draw->AddRectFilled(ImVec2(wPos.x + 4, wPos.y + 54), ImVec2(wPos.x + sbW + 6, wPos.y + wSize.y - 32),
+            ImColor(0.03f, 0.035f, 0.05f, 0.60f), 5.0f);
+        const char* lbl[] = {"AIM","VIS","WEP","RAD","MOVE","AA","CAM","DMZ","CFG","PLY"};
+        const char* icn[] = {"\xe2\x9b\x85","\xf0\x9f\x91\x81","\xe2\x99\xaa","\xf0\x9f\x93\xa1","\xf0\x9f\x8f\x83","\xf0\x9f\x8e\xaf","\xf0\x9f\x93\xb7","\xf0\x9f\x92\xa3","\xe2\x9a\x99\xef\xb8\x8f","\xf0\x9f\x91\xa5"};
+        for (int i=0;i<10;i++) MenuUI::SidebarTab(accent, activeTab==i, lbl[i], icn[i], i, 10);
+        ImGui::EndGroup();
+
+        // ---- search (content area) ----
+        ImGui::SetCursorPos(ImVec2(sbW + 20, 60));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-        ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 28);
+        ImGui::SetNextItemWidth(wSize.x - sbW - 44);
         ImGui::InputTextWithHint("##search", "Search features...  (ESC to clear)", searchBuf, sizeof(searchBuf));
         ImGui::PopStyleVar();
-
-        static const struct { const char* label; int tab; } registry[] = {
-            {"Aimbot Enable",0},{"Aimbot FOV",0},{"Aimbot Smoothness",0},{"Headshot Only",0},{"Wall Bang",0},
-            {"Target Mode",0},{"Bullet Tracking",0},{"Draw FOV Circle",0},{"Exfil Camp",0},{"Buy Station Camp",0},
-            {"Camp Range",0},{"Silent Aim",0},{"Silent FOV",0},{"Silent Headshot",0},{"Triggerbot",0},
-            {"Trigger Advanced",0},{"Trigger Delay",0},{"Auto Shoot",0},
-            {"ESP",1},{"Wallhack",1},{"Visible Only",1},{"ESP Boxes",1},{"ESP Snaplines",1},{"ESP Health",1},
-            {"ESP Names",1},{"ESP Distance",1},{"Head Circle",1},{"Loot ESP",1},{"Vehicle ESP",1},
-            {"Skeleton",1},{"Skeleton Bones",1},{"Skeleton Joints",1},{"Weapon Names",1},{"Squad Count",1},
-            {"Item Rarity",1},{"Exfil ESP",1},{"Contract ESP",1},{"Dead Bodies",1},{"Buy Station ESP",1},
-            {"Stronghold ESP",1},{"Boss Locations",1},{"SAM Sites",1},{"Supply Drops",1},{"World HUD",1},
-            {"Watermark",1},{"Game Mode",1},{"Compass",1},{"HUD Timer",1},{"Visibility Indicator",1},
-            {"Grenade Prediction",1},{"Sound ESP",1},{"Sound Footsteps",1},{"Sound Gunshots",1},
-            {"Sound Explosions",1},{"Sound Vehicles",1},
-            {"No Recoil",2},{"No Spread",2},{"Rapid Fire",2},{"Rapid Fire Delay",2},{"Auto Fire",2},
-            {"Infinite Ammo",2},{"Instant Swap",2},{"Instant Reload",2},{"Ammo Modifier",2},
-            {"Radar",3},{"Radar Range",3},{"Radar Size",3},{"Radar Opacity",3},{"Rotate Radar",3},
-            {"Radar Enemies",3},{"Radar Teammates",3},{"Radar Vehicles",3},{"Radar AI",3},
-            {"Bunny Hop",4},{"Speed Multiplier",4},{"No Fall Damage",4},{"Air Strafing",4},
-            {"Anti-Aim",5},{"Anti-Aim Mode",5},{"Spin Speed",5},{"Jitter Range",5},{"Disable On Fire",5},
-            {"Third Person",6},{"Third Person Distance",6},{"FOV Changer",6},{"Custom FOV",6},{"Free Cam",6},
-            {"Night Vision",6},{"Thermal Vision",6},
-            {"Vehicle Speed Boost",7},{"Vehicle God Mode",7},{"Speed Mult",7},{"Exfil Camp Mode",7},
-            {"Boss Priority Aim",7},{"Name Spoofer",7},{"Name Spoof",7},{"Bypass Profanity",7},
-            {"Clan Tag",7},{"Auto Loot",7},{"Loot Filter",7},{"Auto Pickup",7},{"Name Rotator",7},
-            {"Spectator Tracker",7},{"Detect Spectators",7},{"Auto Cloak",7},{"Account Health",7},
-            {"Stealth",8},{"Anti-Debug",8},{"Blacklist Scan",8},{"Accent Color",8},{"Custom Crosshair",8},
-            {"Crosshair Type",8},{"Crosshair Size",8},{"Crosshair Thickness",8},{"Crosshair Gap",8},
-            {"Crosshair Color",8},{"FOV Circle Color",8},{"FOV Circle Thickness",8},
-            {"Crosshair Outline",8},{"Reset to Defaults",8},
-            {"Session Timer",8},{"Save Config",8},{"Load Config",8},{"Player List",8},{"Keybind Editor",8},
-        };
-        const size_t n = sizeof(registry)/sizeof(registry[0]);
-
-        std::string q = searchBuf;
-        std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c){ return (char)std::tolower(c); });
-
-        float h = ImGui::GetWindowHeight() - 200;
-        if (!q.empty() && h > 60) {
-            if (ImGui::BeginChild("##sr", ImVec2(ImGui::GetWindowWidth()-12, h), true)) {
+        if (searchBuf[0] != 0) {
+            ImGui::SetCursorPos(ImVec2(sbW + 20, 100));
+            float h = wSize.y - 140;
+            if (h > 60 && ImGui::BeginChild("##sr", ImVec2(wSize.x - sbW - 40, h), true)) {
                 const char* tabNames[] = {"AIM","VIS","WEP","RAD","MOVE","AA","CAM","DMZ","CFG","PLY"};
+                std::string q = searchBuf;
+                std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c){ return (char)std::tolower(c); });
                 bool any = false;
+                static const struct { const char* label; int tab; } registry[] = {
+                    {"Aimbot Enable",0},{"Aimbot FOV",0},{"Aimbot Smoothness",0},{"Headshot Only",0},{"Wall Bang",0},
+                    {"Target Mode",0},{"Bullet Tracking",0},{"Draw FOV Circle",0},{"Exfil Camp",0},{"Buy Station Camp",0},
+                    {"Camp Range",0},{"Silent Aim",0},{"Silent FOV",0},{"Silent Headshot",0},{"Triggerbot",0},
+                    {"Trigger Advanced",0},{"Trigger Delay",0},{"Auto Shoot",0},
+                    {"ESP",1},{"Wallhack",1},{"Visible Only",1},{"ESP Boxes",1},{"ESP Snaplines",1},{"ESP Health",1},
+                    {"ESP Names",1},{"ESP Distance",1},{"Head Circle",1},{"Loot ESP",1},{"Vehicle ESP",1},
+                    {"Skeleton",1},{"Skeleton Bones",1},{"Skeleton Joints",1},{"Weapon Names",1},{"Squad Count",1},
+                    {"Item Rarity",1},{"Exfil ESP",1},{"Contract ESP",1},{"Dead Bodies",1},{"Buy Station ESP",1},
+                    {"Stronghold ESP",1},{"Boss Locations",1},{"SAM Sites",1},{"Supply Drops",1},{"World HUD",1},
+                    {"Watermark",1},{"Game Mode",1},{"Compass",1},{"HUD Timer",1},{"Visibility Indicator",1},
+                    {"Grenade Prediction",1},{"Sound ESP",1},{"Sound Footsteps",1},{"Sound Gunshots",1},
+                    {"Sound Explosions",1},{"Sound Vehicles",1},
+                    {"No Recoil",2},{"No Spread",2},{"Rapid Fire",2},{"Rapid Fire Delay",2},{"Auto Fire",2},
+                    {"Infinite Ammo",2},{"Instant Swap",2},{"Instant Reload",2},{"Ammo Modifier",2},
+                    {"Radar",3},{"Radar Range",3},{"Radar Size",3},{"Radar Opacity",3},{"Rotate Radar",3},
+                    {"Radar Enemies",3},{"Radar Teammates",3},{"Radar Vehicles",3},{"Radar AI",3},
+                    {"Bunny Hop",4},{"Speed Multiplier",4},{"No Fall Damage",4},{"Air Strafing",4},
+                    {"Anti-Aim",5},{"Anti-Aim Mode",5},{"Spin Speed",5},{"Jitter Range",5},{"Disable On Fire",5},
+                    {"Third Person",6},{"Third Person Distance",6},{"FOV Changer",6},{"Custom FOV",6},{"Free Cam",6},
+                    {"Night Vision",6},{"Thermal Vision",6},
+                    {"Vehicle Speed Boost",7},{"Vehicle God Mode",7},{"Speed Mult",7},{"Exfil Camp Mode",7},
+                    {"Boss Priority Aim",7},{"Name Spoofer",7},{"Name Spoof",7},{"Bypass Profanity",7},
+                    {"Clan Tag",7},{"Auto Loot",7},{"Loot Filter",7},{"Auto Pickup",7},{"Name Rotator",7},
+                    {"Spectator Tracker",7},{"Detect Spectators",7},{"Auto Cloak",7},{"Account Health",7},
+                    {"Stealth",8},{"Anti-Debug",8},{"Blacklist Scan",8},{"Accent Color",8},{"Custom Crosshair",8},
+                    {"Crosshair Type",8},{"Crosshair Size",8},{"Crosshair Thickness",8},{"Crosshair Gap",8},
+                    {"Crosshair Color",8},{"FOV Circle Color",8},{"FOV Circle Thickness",8},
+                    {"Crosshair Outline",8},{"Reset to Defaults",8},
+                    {"Session Timer",8},{"Save Config",8},{"Load Config",8},{"Player List",8},{"Keybind Editor",8},
+                };
+                const size_t n = sizeof(registry)/sizeof(registry[0]);
                 for (size_t i = 0; i < n; i++) {
                     std::string l = registry[i].label;
                     std::string lc = l; std::transform(lc.begin(), lc.end(), lc.begin(), [](unsigned char c){ return (char)std::tolower(c); });
@@ -723,82 +664,14 @@ public:
                 if (!any) ImGui::TextDisabled("No matches");
             }
             ImGui::EndChild();
-            return;
-        }
-    }
-
-    int Render(bool* menuOpen, const std::string& status, int pc, int vc, int lh, int la) {
-        if (!open) return activeTab;
-        time += ImGui::GetIO().DeltaTime;
-        particleTimer += ImGui::GetIO().DeltaTime;
-        if (particles.size() < 14 && particleTimer > 0.15f) {
-            particleTimer = 0;
-            Particle p;
-            p.pos = ImVec2((float)(rand()%300)+40, -10.0f);
-            p.vel = ImVec2(((float)rand()/RAND_MAX-0.5f)*0.15f, ((float)rand()/RAND_MAX)*0.3f+0.1f);
-            p.life = p.maxLife = (float)rand()/RAND_MAX*2.0f+1.0f;
-            p.size = (float)rand()/RAND_MAX*1.5f+0.5f;
-            p.color = ImColor((int)(accent.x*255)+(rand()%30), (int)(accent.y*255)+(rand()%40), (int)(accent.z*255), 120);
-            particles.push_back(p);
-        }
-        for (int i=(int)particles.size()-1; i>=0; i--) {
-            auto& p = particles[i];
-            float dt = ImGui::GetIO().DeltaTime;
-            p.pos.x += p.vel.x*60*dt; p.pos.y += p.vel.y*60*dt; p.life -= dt;
-            if (p.life <= 0 || p.pos.y > 600) particles.erase(particles.begin()+i);
+            ImGui::End();
+            return activeTab;
         }
 
-        float dspX = ImGui::GetIO().DisplaySize.x, dspY = ImGui::GetIO().DisplaySize.y;
-        float winW = 620.0f, winH = 480.0f;
-        if (dspX > 0 && dspY > 0) {
-            winW = (dspX < 640) ? dspX - 16 : 620.0f;
-            winH = (dspY < 520) ? dspY - 16 : 480.0f;
-        }
-        ImGui::SetNextWindowSizeConstraints(ImVec2(winW - 40, winH - 30), ImVec2(winW, winH));
-        ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_FirstUseEver);
-        ImGui::Begin("ZORMenu v4.0", menuOpen,
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        ImVec2 wPos = ImGui::GetWindowPos(), wSize = ImGui::GetWindowSize();
-        for (auto& p : particles) {
-            float alpha = (p.life/p.maxLife)*0.3f;
-            ImColor c = p.color; c.Value.w = alpha;
-            draw->AddCircleFilled(ImVec2(wPos.x+p.pos.x, wPos.y+p.pos.y), p.size, c);
-        }
-
-        draw->AddRectFilledMultiColor(ImVec2(wPos.x,wPos.y), ImVec2(wPos.x+wSize.x,wPos.y+70),
-            ImColor(accent.x,accent.y,accent.z,0.08f), ImColor(accent.x,accent.y,accent.z,0.02f),
-            ImColor(accent.x,accent.y,accent.z,0.02f), ImColor(accent.x,accent.y,accent.z,0.08f));
-        draw->AddLine(ImVec2(wPos.x,wPos.y+70), ImVec2(wPos.x+wSize.x,wPos.y+70), ImColor(0.20f,0.20f,0.28f,0.50f));
-
-        ImGui::SetCursorPos(ImVec2(12,12));
-        ImGui::TextColored(ImVec4(accent.x,accent.y,accent.z,1.0f), "ZORMenu");
-        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.50f,0.50f,0.55f,1.0f), "v4.0");
-
-        ImGui::SameLine(wSize.x-120);
-        bool connected = status.find("Connected") != std::string::npos;
-        ImColor stC = connected ? ImColor(0.0f,0.85f,0.20f,1.0f) : ImColor(0.85f,0.20f,0.0f,1.0f);
-        draw->AddCircleFilled(ImVec2(wPos.x+wSize.x-100, wPos.y+18), 4, stC);
-        ImGui::TextColored((ImVec4)stC, connected ? "CONNECTED" : "DISCONNECTED");
-
-        ImGui::SetCursorPos(ImVec2(12,32));
-        ImGui::TextColored(ImVec4(0.60f,0.60f,0.65f,1.0f), "P: %d  V: %d  HP: %d  Armor: %d", pc, vc, lh, la);
-
-        ImGui::SetCursorPos(ImVec2(4,76)); ImGui::BeginGroup();
-        draw->AddRectFilled(ImVec2(wPos.x+4,wPos.y+74), ImVec2(wPos.x+wSize.x-4,wPos.y+116),
-            ImColor(0.08f,0.08f,0.12f,0.40f), 6.0f);
-        const char* lbl[] = {"AIM","VIS","WEP","RAD","MOVE","AA","CAM","DMZ","CFG","PLY"};
-        const char* icn[] = {"\xe2\x9b\x85","\xf0\x9f\x91\x81","\xe2\x99\xaa","\xf0\x9f\x93\xa1","\xf0\x9f\x8f\x83","\xf0\x9f\x8e\xaf","\xf0\x9f\x93\xb7","\xf0\x9f\x92\xa3","\xe2\x9a\x99\xef\xb8\x8f","\xf0\x9f\x91\xa5"};
-        for (int i=0;i<10;i++) TabBtn(lbl[i], icn[i], i, 10);
-        ImGui::EndGroup();
-
-        RenderSearch();
-        if (searchBuf[0] != 0) { ImGui::End(); return activeTab; }
-
-        ImGui::SetCursorPos(ImVec2(6,170));
-        float cH = wSize.y-130;
-        if (ImGui::BeginChild("C", ImVec2(wSize.x-12,cH), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_None)) {
+        // ---- content panel ----
+        ImGui::SetCursorPos(ImVec2(sbW + 20, 96));
+        float cH = wSize.y - 96 - 40;
+        if (ImGui::BeginChild("C", ImVec2(wSize.x - sbW - 40, cH), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_None)) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8,6));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8,4));
             switch(activeTab) {
@@ -810,6 +683,9 @@ public:
             ImGui::PopStyleVar(2);
         }
         ImGui::EndChild();
+
+        // ---- footer ----
+        MenuUI::DrawFooter(draw, wPos, wSize, accent, pc, vc);
         ImGui::End();
         return activeTab;
     }
