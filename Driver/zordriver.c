@@ -7,6 +7,11 @@
 #include "zordriver.h"
 
 #define DWORD ULONG
+#define WORD USHORT
+
+#ifndef STATUS_MODULE_NOT_FOUND
+#define STATUS_MODULE_NOT_FOUND ((NTSTATUS)0xC0000130L)
+#endif
 
 NTSTATUS MmCopyVirtualMemory(
     PEPROCESS SourceProcess,
@@ -34,76 +39,14 @@ NTSTATUS ZwQueryInformationProcess(
     PULONG ReturnLength
 );
 
-// LdrLoadDll / LdrGetProcedureAddress are resolved at runtime from the target's
-// ntdll exports (never linked, so the driver has no user-mode import table).
-typedef NTSTATUS(*pfnLdrLoadDll)(PWSTR, ULONG, PUNICODE_STRING, PHANDLE);
-typedef NTSTATUS(*pfnLdrGetProcedureAddress)(HANDLE, PUNICODE_STRING, USHORT, PVOID*);
-
-// NtCreateThreadEx is not exported by ntoskrnl.lib; resolved at runtime.
-typedef NTSTATUS(*pfnNtCreateThreadEx)(
-    PHANDLE ThreadHandle,
-    ACCESS_MASK DesiredAccess,
-    POBJECT_ATTRIBUTES ObjectAttributes,
-    HANDLE ProcessHandle,
-    PVOID StartRoutine,
-    PVOID Argument,
-    ULONG CreateFlags,
-    SIZE_T ZeroBits,
-    SIZE_T StackSize,
-    SIZE_T MaximumStackSize,
-    PULONG AttributeList
-);
-
-#define LDR_LOAD_BLOCK (const unsigned char[]){0x16,0x3E,0x28,0x16,0x35,0x3B,0x3E,0x1E,0x36,0x36}
-#define LDR_GET_PROC_BLOCK (const unsigned char[]){0x16,0x3E,0x28,0x1D,0x3F,0x2E,0x0A,0x28,0x35,0x39,0x3F,0x3E,0x2F,0x28,0x3F,0x1B,0x3E,0x3E,0x28,0x3F,0x29,0x29}
-
-static void DecodeName(char* dst, int dstLen, const unsigned char* block, int blockLen) {
-    int n = blockLen < dstLen ? blockLen : dstLen - 1;
-    for (int i = 0; i < n; i++) dst[i] = (char)(block[i] ^ SO_KEY);
-    dst[n] = '\0';
-}
-
-static PVOID FindNtdllExport(ULONG_PTR ntdllBase, const char* name) {
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)ntdllBase;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(ntdllBase + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return NULL;
-
-    IMAGE_DATA_DIRECTORY expDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-    if (!expDir.VirtualAddress || !expDir.Size) return NULL;
-
-    PIMAGE_EXPORT_DIRECTORY ed = (PIMAGE_EXPORT_DIRECTORY)(ntdllBase + expDir.VirtualAddress);
-    DWORD* names = (DWORD*)(ntdllBase + ed->AddressOfNames);
-    USHORT* ordinals = (USHORT*)(ntdllBase + ed->AddressOfNameOrdinals);
-    DWORD* funcs = (DWORD*)(ntdllBase + ed->AddressOfFunctions);
-
-    for (DWORD i = 0; i < ed->NumberOfNames; i++) {
-        const char* n = (const char*)(ntdllBase + names[i]);
-        if (strcmp(n, name) == 0) {
-            DWORD rva = funcs[ordinals[i]];
-            return (PVOID)(ntdllBase + rva);
-        }
-    }
-    return NULL;
-}
-
-static ULONG_PTR GetNtdllBase();
-
-static pfnLdrLoadDll g_LdrLoadDll = NULL;
-static pfnLdrGetProcedureAddress g_LdrGetProcAddr = NULL;
-
-static NTSTATUS ResolveNtdllRoutines() {
-    if (g_LdrLoadDll && g_LdrGetProcAddr) return STATUS_SUCCESS;
-    ULONG_PTR ntdllBase = GetNtdllBase();
-    if (!ntdllBase) return STATUS_UNSUCCESSFUL;
-    char ldrName[32], getProcName[32];
-    DecodeName(ldrName, sizeof(ldrName), LDR_LOAD_BLOCK, (int)sizeof(LDR_LOAD_BLOCK));
-    DecodeName(getProcName, sizeof(getProcName), LDR_GET_PROC_BLOCK, (int)sizeof(LDR_GET_PROC_BLOCK));
-    g_LdrLoadDll = (pfnLdrLoadDll)FindNtdllExport(ntdllBase, ldrName);
-    g_LdrGetProcAddr = (pfnLdrGetProcedureAddress)FindNtdllExport(ntdllBase, getProcName);
-    if (!g_LdrLoadDll || !g_LdrGetProcAddr) return STATUS_UNSUCCESSFUL;
-    return STATUS_SUCCESS;
-}
+// Import resolution is done entirely via memory reads of the TARGET process's
+// already-loaded modules (we are attached to the target, so its user memory is
+// dereferenceable). We NEVER call user-mode ntdll functions from kernel mode
+// (LdrLoadDll/LdrGetProcAddress) -- executing user-mode code at CPL0 takes the
+// loader lock, does syscalls and touches pageable pages, which fault the kernel
+// (bugcheck 0x1E/0x50). All imports of ZORClient.dll (d3d11, USER32, KERNEL32,
+// SHELL32, ntdll, XINPUT1_4, D3DCOMPILER_47, IMM32) are already loaded in the
+// game, so a pure memory walk is sufficient.
 #define DEVICE_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x06,0x00,0x15,0x08,0x5A}
 
 #define SYMLINK_NAME_BLOCK (const unsigned char[]){0x06,0x1E,0x35,0x29,0x1E,0x3F,0x2C,0x33,0x39,0x3F,0x29,0x06,0x00,0x15,0x08,0x5A}
@@ -196,11 +139,16 @@ typedef struct _PEB {
     // ... rest not needed
 } PEB, *PPEB;
 
-static ULONG_PTR GetNtdllBase() {
-    PEPROCESS cur = PsGetCurrentProcess();
+// Find the base address of a module already loaded in the target process by
+// walking the target's PEB loader list. Runs while attached to the target, so
+// all reads are of the target's own user memory (no kernel-mode ntdll calls).
+// Case-insensitive match on BaseDllName.
+static ULONG_PTR FindLoadedModuleBase(PCWSTR wantedName) {
+    if (!wantedName) return 0;
+    PEPROCESS current = PsGetCurrentProcess();
     PROCESS_BASIC_INFORMATION pbi;
     ULONG retLen = 0;
-    NTSTATUS st = ZwQueryInformationProcess((HANDLE)cur, ProcessBasicInformation, &pbi, sizeof(pbi), &retLen);
+    NTSTATUS st = ZwQueryInformationProcess((HANDLE)current, ProcessBasicInformation, &pbi, sizeof(pbi), &retLen);
     if (!NT_SUCCESS(st) || !pbi.PebBaseAddress) return 0;
 
     ULONG_PTR pebAddr = (ULONG_PTR)pbi.PebBaseAddress;
@@ -214,13 +162,23 @@ static ULONG_PTR GetNtdllBase() {
         for (int i = 0; i < 1024 && (ULONG_PTR)entry != (ULONG_PTR)&head; i++) {
             LDR_DATA_TABLE_ENTRY e;
             RtlCopyMemory(&e, entry, sizeof(e));
-            if (e.BaseDllName.Buffer && e.BaseDllName.Length >= 7 * sizeof(WCHAR)) {
-                WCHAR nameBuf[16] = { 0 };
+            if (e.BaseDllName.Buffer && e.BaseDllName.Length >= 2 * sizeof(WCHAR)) {
+                WCHAR nameBuf[64] = { 0 };
                 ULONG cb = e.BaseDllName.Length;
-                if (cb > 14 * sizeof(WCHAR)) cb = 14 * sizeof(WCHAR);
+                if (cb > (ULONG)(62 * sizeof(WCHAR))) cb = 62 * sizeof(WCHAR);
                 RtlCopyMemory(nameBuf, e.BaseDllName.Buffer, cb);
-                if (nameBuf[0] == L'n' && nameBuf[1] == L't' && nameBuf[2] == L'd' &&
-                    nameBuf[3] == L'l' && nameBuf[4] == L'l') {
+
+                // Case-insensitive comparison.
+                SIZE_T j = 0;
+                BOOLEAN match = TRUE;
+                while (wantedName[j] && nameBuf[j]) {
+                    WCHAR a = wantedName[j], b = nameBuf[j];
+                    if (a >= L'a' && a <= L'z') a -= (L'a' - L'A');
+                    if (b >= L'a' && b <= L'z') b -= (L'a' - L'A');
+                    if (a != b) { match = FALSE; break; }
+                    j++;
+                }
+                if (match && !wantedName[j] && !nameBuf[j]) {
                     return (ULONG_PTR)e.DllBase;
                 }
             }
@@ -240,63 +198,82 @@ static void RandomDelay() {
     KeDelayExecutionThread(KernelMode, FALSE, &delay);
 }
 
-NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
+// Resolve the remote DLL's import table WITHOUT executing any user-mode code.
+// Walks the target's PEB loader list to find each import module's base, then
+// walks that module's export directory (all direct reads of the target's user
+// memory while attached). Writes resolved addresses straight into the remote
+// IAT. No syscalls, no locks, no user-mode ntdll calls from CPL0.
+static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
     DWORD importRVA = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
     if (!importRVA) return STATUS_SUCCESS;
-
-    if (!g_LdrLoadDll || !g_LdrGetProcAddr) {
-        NTSTATUS rs = ResolveNtdllRoutines();
-        if (!NT_SUCCESS(rs)) return rs;
-    }
 
     PIMAGE_IMPORT_DESCRIPTOR imports = (PIMAGE_IMPORT_DESCRIPTOR)((PUCHAR)pRemoteDll + importRVA);
     int resolvedCount = 0;
 
-    for (; imports->Name; imports++) {
-        char* moduleName = (char*)((PUCHAR)pRemoteDll + imports->Name);
+    __try {
+        for (; imports->Name; imports++) {
+            char* moduleName = (char*)((PUCHAR)pRemoteDll + imports->Name);
 
-        ANSI_STRING ansiModName;
-        UNICODE_STRING uniModName;
-        RtlInitAnsiString(&ansiModName, moduleName);
-        NTSTATUS status = RtlAnsiStringToUnicodeString(&uniModName, &ansiModName, TRUE);
-        if (!NT_SUCCESS(status)) continue;
+            // Convert ANSI module name (in the remote DLL) to a local UNICODE copy.
+            WCHAR wideName[128] = { 0 };
+            int wlen = 0;
+            for (; moduleName[wlen] && wlen < 126; wlen++) wideName[wlen] = (WCHAR)(UCHAR)moduleName[wlen];
 
-        HANDLE hModule = NULL;
-        status = g_LdrLoadDll(NULL, 0, &uniModName, &hModule);
-        RtlFreeUnicodeString(&uniModName);
+            ULONG_PTR hModule = FindLoadedModuleBase(wideName);
+            if (!hModule) return STATUS_MODULE_NOT_FOUND;
 
-        if (!NT_SUCCESS(status) || !hModule) return STATUS_UNSUCCESSFUL;
+            // Read the module's PE headers from the target.
+            PIMAGE_DOS_HEADER mdos = (PIMAGE_DOS_HEADER)hModule;
+            if (mdos->e_magic != IMAGE_DOS_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
+            PIMAGE_NT_HEADERS mnt = (PIMAGE_NT_HEADERS)(hModule + mdos->e_lfanew);
+            if (mnt->Signature != IMAGE_NT_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
 
-        PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)((PUCHAR)pRemoteDll + imports->OriginalFirstThunk);
-        PIMAGE_THUNK_DATA iat = (PIMAGE_THUNK_DATA)((PUCHAR)pRemoteDll + imports->FirstThunk);
+            PIMAGE_DATA_DIRECTORY expDir = &mnt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+            if (!expDir->VirtualAddress || !expDir->Size) return STATUS_NOT_FOUND;
 
-        for (; thunk->u1.AddressOfData; thunk++, iat++) {
-            PVOID func = NULL;
+            PIMAGE_EXPORT_DIRECTORY ed = (PIMAGE_EXPORT_DIRECTORY)(hModule + expDir->VirtualAddress);
+            DWORD* names = (DWORD*)(hModule + ed->AddressOfNames);
+            USHORT* ordinals = (USHORT*)(hModule + ed->AddressOfNameOrdinals);
+            DWORD* funcs = (DWORD*)(hModule + ed->AddressOfFunctions);
 
-            if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
-                LPCSTR ordName = (LPCSTR)(thunk->u1.Ordinal & 0xFFFF);
-                ANSI_STRING ansiFunc;
-                RtlInitAnsiString(&ansiFunc, ordName);
-                UNICODE_STRING uniFunc;
-                RtlAnsiStringToUnicodeString(&uniFunc, &ansiFunc, TRUE);
-                g_LdrGetProcAddr(hModule, &uniFunc, 0, &func);
-                RtlFreeUnicodeString(&uniFunc);
+            PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)((PUCHAR)pRemoteDll + imports->OriginalFirstThunk);
+            PIMAGE_THUNK_DATA iat = (PIMAGE_THUNK_DATA)((PUCHAR)pRemoteDll + imports->FirstThunk);
+
+            for (; thunk->u1.AddressOfData; thunk++, iat++) {
+                PVOID func = NULL;
+
+                if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
+                    // Import by ordinal.
+                    WORD ord = (WORD)(thunk->u1.Ordinal & 0xFFFF);
+                    if (ord >= ed->NumberOfFunctions) return STATUS_PROCEDURE_NOT_FOUND;
+                    func = (PVOID)(hModule + funcs[ord]);
+                }
+                else {
+                    PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((PUCHAR)pRemoteDll + thunk->u1.AddressOfData);
+                    const char* funcName = (const char*)byName->Name;
+
+                    // Linear scan of the export name table (case-sensitive, as PE does).
+                    BOOLEAN found = FALSE;
+                    for (DWORD i = 0; i < ed->NumberOfNames; i++) {
+                        const char* n = (const char*)(hModule + names[i]);
+                        SIZE_T a = 0;
+                        while (funcName[a] && funcName[a] == n[a]) a++;
+                        if (funcName[a] == 0 && n[a] == 0) {
+                            func = (PVOID)(hModule + funcs[ordinals[i]]);
+                            found = TRUE;
+                            break;
+                        }
+                    }
+                    if (!found) return STATUS_PROCEDURE_NOT_FOUND;
+                }
+
+                iat->u1.Function = (ULONGLONG)func;
+                resolvedCount++;
             }
-            else {
-                PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((PUCHAR)pRemoteDll + thunk->u1.AddressOfData);
-                ANSI_STRING ansiFunc;
-                RtlInitAnsiString(&ansiFunc, byName->Name);
-                UNICODE_STRING uniFunc;
-                RtlAnsiStringToUnicodeString(&uniFunc, &ansiFunc, TRUE);
-                g_LdrGetProcAddr(hModule, &uniFunc, 0, &func);
-                RtlFreeUnicodeString(&uniFunc);
-            }
-
-            if (!func) return STATUS_UNSUCCESSFUL;
-
-            iat->u1.Function = (ULONGLONG)func;
-            resolvedCount++;
         }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return STATUS_ACCESS_VIOLATION;
     }
     return STATUS_SUCCESS;
 }
