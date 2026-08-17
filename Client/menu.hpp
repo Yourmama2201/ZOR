@@ -122,6 +122,7 @@ private:
     bool *sessionTimerEnabled;
 
     std::function<void()> onSaveConfig, onLoadConfig, onResetConfig;
+    std::function<void(const char*)> onApplyPreset;
     std::function<std::vector<std::string>()> onListProfiles;
     std::function<void(const char*)> onLoadProfile, onSaveProfile, onDeleteProfile;
     std::function<const char*()> onCurrentProfile;
@@ -465,7 +466,27 @@ private:
             ImGui::SameLine();
             if (ImGui::Button("Load Config", ImVec2(140, 28))) { if (onLoadConfig) onLoadConfig(); }
             if (ImGui::Button("Reset to Defaults", ImVec2(140, 28))) { if (onResetConfig) onResetConfig(); }
-            ImGui::PopStyleColor(2); End();
+            ImGui::PopStyleColor(2);
+
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.55f, 1.0f), "PRESETS");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("One-click playstyles: Rage = max power, Legit = looks human");
+            ImGui::Spacing();
+            if (onApplyPreset) {
+                const char* presets[] = { "Rage", "Semi Rage", "Sweat", "Semi Legit", "Legit" };
+                const char* desc[]  = { "Full power: instant, walls, auto-everything",
+                                        "Aggressive: fast aim, wallbang, auto shoot",
+                                        "Tournament-level: fast but clean",
+                                        "Soft: smaller FOV, humanized, no walls",
+                                        "Stealth: small FOV, slow, looks legit" };
+                float bw = (ImGui::GetContentRegionAvail().x - 16.0f) / 2.0f;
+                for (int i = 0; i < 5; i++) {
+                    if (ImGui::Button(presets[i], ImVec2(bw, 30))) { onApplyPreset(presets[i]); }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", desc[i]);
+                    if (i % 2 == 0) ImGui::SameLine();
+                }
+            }
+            End();
         }
         if (Sub("Player List")) { T("Show Player Info", playerListOpen, "Show live player list overlay"); End(); }
         ImGui::Dummy(ImVec2(0,4));
@@ -571,6 +592,7 @@ public:
     void SetConfigCallbacks(std::function<void()> save, std::function<void()> load, std::function<void()> reset) {
         onSaveConfig = save; onLoadConfig = load; onResetConfig = reset;
     }
+    void SetPresetCallback(std::function<void(const char*)> apply) { onApplyPreset = apply; }
     void SetProfileCallbacks(std::function<std::vector<std::string>()> list,
         std::function<void(const char*)> loadP, std::function<void(const char*)> saveP,
         std::function<void(const char*)> delP, std::function<const char*()> cur) {

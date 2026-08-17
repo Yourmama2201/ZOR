@@ -385,6 +385,70 @@ void ResetConfig() {
     g_Debug.Log("[Config] Reset to defaults");
 }
 
+// One-click playstyle presets. Tunes the aimbot, silent aim, wallbang, ESP and
+// triggerbot to match the label. The menu calls this when a PRESETS button is
+// hit; values take effect next frame (the features read these globals).
+void ApplyPreset(const char* name) {
+    std::string n = name ? name : "";
+    if (n == "Rage") {
+        g_aimbotEnabled = true; g_silentAimEnabled = true; g_triggerbotEnabled = true;
+        g_headshotOnly = false; g_wallBang = true; g_autoWall = true;
+        g_aimFOV = 60.0f; g_aimSmooth = 0.30f; g_aimMaxDistance = 5000.0f;
+        g_bestBone = true; g_stickToTarget = false;
+        g_aimVisibleOnly = false; g_bulletDrop = true; g_bulletSpeed = 800.0f;
+        g_lowestHealthFirst = true; g_humanSmooth = false;
+        g_autoShoot = true; g_recoilComp = true; g_autoScope = true;
+        g_silentFOV = 30.0f; g_silentHeadshot = false;
+        g_espEnabled = true; g_wallhack = true; g_drawFovCircle = true;
+    }
+    else if (n == "Semi Rage") {
+        g_aimbotEnabled = true; g_silentAimEnabled = true; g_triggerbotEnabled = true;
+        g_headshotOnly = false; g_wallBang = true; g_autoWall = true;
+        g_aimFOV = 45.0f; g_aimSmooth = 0.12f; g_aimMaxDistance = 4000.0f;
+        g_bestBone = true; g_stickToTarget = true;
+        g_aimVisibleOnly = false; g_bulletDrop = true; g_bulletSpeed = 800.0f;
+        g_lowestHealthFirst = true; g_humanSmooth = true;
+        g_autoShoot = true; g_recoilComp = true; g_autoScope = true;
+        g_silentFOV = 20.0f; g_silentHeadshot = false;
+        g_espEnabled = true; g_wallhack = true; g_drawFovCircle = false;
+    }
+    else if (n == "Sweat") {
+        g_aimbotEnabled = true; g_silentAimEnabled = true; g_triggerbotEnabled = true;
+        g_headshotOnly = false; g_wallBang = true; g_autoWall = false;
+        g_aimFOV = 35.0f; g_aimSmooth = 0.08f; g_aimMaxDistance = 3000.0f;
+        g_bestBone = true; g_stickToTarget = true;
+        g_aimVisibleOnly = false; g_bulletDrop = true; g_bulletSpeed = 800.0f;
+        g_lowestHealthFirst = true; g_humanSmooth = true;
+        g_autoShoot = true; g_recoilComp = true; g_autoScope = true;
+        g_silentFOV = 15.0f; g_silentHeadshot = false;
+        g_espEnabled = true; g_wallhack = true; g_drawFovCircle = false;
+    }
+    else if (n == "Semi Legit") {
+        g_aimbotEnabled = true; g_silentAimEnabled = true; g_triggerbotEnabled = false;
+        g_headshotOnly = false; g_wallBang = false; g_autoWall = false;
+        g_aimFOV = 20.0f; g_aimSmooth = 0.05f; g_aimMaxDistance = 2500.0f;
+        g_bestBone = true; g_stickToTarget = true;
+        g_aimVisibleOnly = true; g_bulletDrop = true; g_bulletSpeed = 800.0f;
+        g_lowestHealthFirst = false; g_humanSmooth = true;
+        g_autoShoot = false; g_recoilComp = true; g_autoScope = true;
+        g_silentFOV = 12.0f; g_silentHeadshot = true;
+        g_espEnabled = true; g_wallhack = false; g_drawFovCircle = false;
+    }
+    else if (n == "Legit") {
+        g_aimbotEnabled = true; g_silentAimEnabled = false; g_triggerbotEnabled = false;
+        g_headshotOnly = false; g_wallBang = false; g_autoWall = false;
+        g_aimFOV = 12.0f; g_aimSmooth = 0.03f; g_aimMaxDistance = 2000.0f;
+        g_bestBone = true; g_stickToTarget = true;
+        g_aimVisibleOnly = true; g_bulletDrop = true; g_bulletSpeed = 800.0f;
+        g_lowestHealthFirst = false; g_humanSmooth = true;
+        g_autoShoot = false; g_recoilComp = false; g_autoScope = false;
+        g_silentFOV = 8.0f; g_silentHeadshot = true;
+        g_espEnabled = true; g_wallhack = false; g_drawFovCircle = false;
+    }
+    else return;
+    g_Debug.Log("[Preset] Applied: " + std::string(name));
+}
+
 DWORD WINAPI MainThread(LPVOID) {
     g_Debug.Log("[Main] Starting...");
 
@@ -488,6 +552,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
     );
 
     g_menu->SetConfigCallbacks(SaveConfig, LoadConfig, ResetConfig);
+    g_menu->SetPresetCallback(ApplyPreset);
     g_menu->SetProfileCallbacks(
         [&]() { return g_config->ListProfiles(); },
         [&](const char* n) { g_config->LoadProfile(n); LoadConfig(); g_Debug.Log("[Config] Loaded profile: " + std::string(n)); },
