@@ -76,22 +76,20 @@ injector.exe --gen 30        # 30-day license.lic
 
 Check `ZORLoader_runtime.log` for injection status (`Exec ErrorStatus`).
 
-## Default Keybinds
+## Keybinds
+
+Only these features use keybinds — everything else is menu-only:
 
 | Action | Key |
 |---|---|
 | Menu Toggle | INSERT |
-| Aimbot | MOUSE 4 |
+| Lock On (hold to lock a target) | MOUSE 4 |
 | Silent Aim | F6 |
 | Triggerbot | F7 |
 | Anti-Aim | F8 |
-| ESP | F9 |
-| Radar | F10 |
-| No Recoil | F5 |
-| Stealth Mode | F11 |
 | Bone Override (Alt Bone) | MOUSE 5 |
 
-Every bind can be remapped in the in-game Keybind Editor and supports a controller button too.
+Remap them in the in-game Keybind Editor; each supports a controller button too.
 
 ## Disclaimer
 

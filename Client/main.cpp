@@ -472,14 +472,10 @@ DWORD WINAPI MainThread(LPVOID) {
 g_discordRPC = new DiscordRPC();
 g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby", "zor");
     g_keybinds->Add(Keybind("menu_toggle", "Menu Toggle", VK_INSERT, &g_menuOpen));
-    g_keybinds->Add(Keybind("aimbot_toggle", "Aimbot", VK_XBUTTON1, &g_aimbotEnabled));
+    g_keybinds->Add(Keybind("aimbot_lock", "Lock On (hold)", VK_XBUTTON1));
     g_keybinds->Add(Keybind("silent_aim", "Silent Aim", VK_F6, &g_silentAimEnabled));
     g_keybinds->Add(Keybind("triggerbot", "Triggerbot", VK_F7, &g_triggerbotEnabled));
     g_keybinds->Add(Keybind("anti_aim", "Anti-Aim", VK_F8, &g_antiAimEnabled));
-    g_keybinds->Add(Keybind("esp_toggle", "ESP", VK_F9, &g_espEnabled));
-    g_keybinds->Add(Keybind("radar_toggle", "Radar", VK_F10, &g_radarEnabled));
-    g_keybinds->Add(Keybind("no_recoil", "No Recoil", VK_F5, &g_noRecoil));
-    g_keybinds->Add(Keybind("stealth", "Stealth Mode", VK_F11, &g_stealthEnabled));
     g_keybinds->Add(Keybind("bone_override", "Bone Override (Alt Bone)", VK_XBUTTON2));
     g_esp = new ESP(g_mem, g_gameWindow);
     g_aimbot = new Aimbot(g_mem, g_gameBase);
@@ -652,6 +648,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
             g_aimbot->SetBestBone(g_bestBone); g_aimbot->SetBoneOverride(g_boneOverride);
             g_aimbot->SetBoneOverrideKey(g_boneOverrideKey); g_aimbot->SetBoneOverrideId(g_boneOverrideId);
             g_aimbot->SetBoneOverrideHeld(g_keybinds->IsHeld("bone_override"));
+            g_aimbot->SetLockOnHeld(g_keybinds->IsHeld("aimbot_lock"));
             g_aimbot->SetHeadOffset(g_headOffset);
             g_aimbot->SetVisibleOnly(g_aimVisibleOnly);
             g_aimbot->SetRiotShieldBypass(g_riotShieldBypass);

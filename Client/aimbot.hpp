@@ -25,6 +25,7 @@ private:
     bool boneOverride;
     bool boneOverrideHeld;
     int boneOverrideKey;
+    bool lockOnHeld;
     int boneOverrideId;
     uintptr_t lockedTarget;
     float headOffset;
@@ -93,7 +94,7 @@ public:
         bulletTracking(true), stickToTarget(false), autoWall(false),
         bestBone(false), boneOverride(false), boneOverrideHeld(false),
         boneOverrideKey(VK_XBUTTON2),
-        boneOverrideId(Offsets::HEAD), lockedTarget(0), headOffset(0.0f),
+        boneOverrideId(Offsets::HEAD), lockOnHeld(false), lockedTarget(0), headOffset(0.0f),
         visibleOnly(false), riotShieldBypass(true), shieldBone(Offsets::LEFT_KNEE),
         autoScope(false), zoomFOV(false), zoomFactor(0.5f), autoShoot(false),
         recoilComp(false), recoilStrength(1.0f), maxDistance(5000.0f),
@@ -123,8 +124,10 @@ public:
             // AI Only Mode
             if (aimMode == 2 && player.GetTeam() != 0) continue;
 
-            // Stick to target: once locked, don't re-acquire unless it's gone
-            if (stickToTarget && lockedTarget != 0 && player.GetPtr() != lockedTarget) {
+            // Stick to target: once locked, don't re-acquire unless it's gone.
+            // Lock On (hold): behave exactly like stick-to-target while held.
+            bool stickActive = stickToTarget || lockOnHeld;
+            if (stickActive && lockedTarget != 0 && player.GetPtr() != lockedTarget) {
                 bool stillValid = false;
                 for (auto& p : players) {
                     if (p.GetPtr() == lockedTarget && p.IsAlive()) { stillValid = true; break; }
@@ -168,9 +171,12 @@ public:
             }
         }
 
-        if (!target) return;
+        if (!target) {
+            if (lockOnHeld) lockedTarget = 0; // released / target gone: drop lock
+            return;
+        }
 
-        if (stickToTarget) lockedTarget = target->GetPtr();
+        if (stickToTarget || lockOnHeld) lockedTarget = target->GetPtr();
 
         int bone = PickBone(*target, localPos);
         Vec3 targetPos = headshotOnly ? CorrectHead(*target, target->GetHeadPos()) : target->GetBonePos(bone);
@@ -242,6 +248,7 @@ public:
     void SetAimMode(int m) { aimMode = m; }
     void SetBulletTracking(bool b) { bulletTracking = b; }
     void SetStickToTarget(bool s) { stickToTarget = s; if (!s) lockedTarget = 0; }
+    void SetLockOnHeld(bool h) { lockOnHeld = h; if (!h) lockedTarget = 0; }
     void SetAutoWall(bool w) { autoWall = w; }
     void SetBestBone(bool b) { bestBone = b; }
     void SetBoneOverride(bool e) { boneOverride = e; }
