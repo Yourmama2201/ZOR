@@ -257,6 +257,17 @@ public:
         return def;
     }
 
+    // Hold-style check: true while the bind's keyboard key OR controller
+    // button is currently down (auto-detects whichever device is active).
+    bool IsHeld(const std::string& name) const {
+        for (auto& b : binds) {
+            if (b.name != name) continue;
+            if (b.key > 0 && (GetAsyncKeyState(b.key) & 0x8000)) return true;
+            if (b.padKey != GP_NONE && PadConnected() && PollPad() == b.padKey) return true;
+        }
+        return false;
+    }
+
     int GetPadKey(const std::string& name) const {
         for (auto& b : binds) if (b.name == name) return b.padKey;
         return GP_NONE;

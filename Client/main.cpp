@@ -480,6 +480,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
     g_keybinds->Add(Keybind("radar_toggle", "Radar", VK_F10, &g_radarEnabled));
     g_keybinds->Add(Keybind("no_recoil", "No Recoil", VK_F5, &g_noRecoil));
     g_keybinds->Add(Keybind("stealth", "Stealth Mode", VK_F11, &g_stealthEnabled));
+    g_keybinds->Add(Keybind("bone_override", "Bone Override (Alt Bone)", VK_XBUTTON2));
     g_esp = new ESP(g_mem, g_gameWindow);
     g_aimbot = new Aimbot(g_mem, g_gameBase);
     g_triggerbot = new Triggerbot(g_mem, g_gameBase);
@@ -650,6 +651,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
             g_aimbot->SetStickToTarget(g_stickToTarget); g_aimbot->SetAutoWall(g_autoWall);
             g_aimbot->SetBestBone(g_bestBone); g_aimbot->SetBoneOverride(g_boneOverride);
             g_aimbot->SetBoneOverrideKey(g_boneOverrideKey); g_aimbot->SetBoneOverrideId(g_boneOverrideId);
+            g_aimbot->SetBoneOverrideHeld(g_keybinds->IsHeld("bone_override"));
             g_aimbot->SetHeadOffset(g_headOffset);
             g_aimbot->SetVisibleOnly(g_aimVisibleOnly);
             g_aimbot->SetRiotShieldBypass(g_riotShieldBypass);

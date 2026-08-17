@@ -23,6 +23,7 @@ private:
     bool autoWall;
     bool bestBone;
     bool boneOverride;
+    bool boneOverrideHeld;
     int boneOverrideKey;
     int boneOverrideId;
     uintptr_t lockedTarget;
@@ -59,13 +60,13 @@ private:
     // front, so we aim at the legs when they have a shield up.
     int PickBone(const Player& target, const Vec3& localPos) {
         int bone = targetBone;
-        if (boneOverride && (GetAsyncKeyState(boneOverrideKey) & 0x8000)) {
+        if (boneOverride && boneOverrideHeld) {
             bone = boneOverrideId;
         }
         else if (riotShieldBypass && target.HasRiotShield(gameBase)) {
             bone = shieldBone;
         }
-        else if (bestBone) {
+        else if (targetBone == Offsets::BEST_BONE || bestBone) {
             float d = localPos.Distance(target.GetPosition());
             // Range-aware: head up close, neck at medium range, chest far out
             // (bigger hitboxes at distance beat precision we can't hold).
@@ -90,7 +91,8 @@ public:
         wallBang(false), fov(30.0f), smoothness(0.05f), targetBone(Offsets::HEAD),
         aimMode(0),
         bulletTracking(true), stickToTarget(false), autoWall(false),
-        bestBone(false), boneOverride(false), boneOverrideKey(VK_XBUTTON2),
+        bestBone(false), boneOverride(false), boneOverrideHeld(false),
+        boneOverrideKey(VK_XBUTTON2),
         boneOverrideId(Offsets::HEAD), lockedTarget(0), headOffset(0.0f),
         visibleOnly(false), riotShieldBypass(true), shieldBone(Offsets::LEFT_KNEE),
         autoScope(false), zoomFOV(false), zoomFactor(0.5f), autoShoot(false),
@@ -243,6 +245,7 @@ public:
     void SetAutoWall(bool w) { autoWall = w; }
     void SetBestBone(bool b) { bestBone = b; }
     void SetBoneOverride(bool e) { boneOverride = e; }
+    void SetBoneOverrideHeld(bool h) { boneOverrideHeld = h; }
     void SetBoneOverrideKey(int k) { boneOverrideKey = k; }
     void SetBoneOverrideId(int b) { boneOverrideId = b; }
     void SetHeadOffset(float o) { headOffset = o; }

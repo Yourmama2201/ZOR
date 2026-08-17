@@ -168,8 +168,8 @@ private:
                 TL("Headshot Only", headshotOnly, "Only lock onto the head bone"); T("Wall Bang", wallBang, "Allow targets through walls");
                 ImGui::Combo("Target Mode", aimMode, "All\0Players Only\0AI Only\0Boss Priority\0");
                 if (!*headshotOnly) {
-                    int boneMap[6] = { Offsets::ROOT, Offsets::NECK, Offsets::SPINE1, Offsets::HEAD, Offsets::LEFT_KNEE, Offsets::RIGHT_KNEE };
-                    static const char* boneNames = "Feet\0Neck\0Chest\0Head\0Left Knee\0Right Knee\0";
+                    int boneMap[6] = { Offsets::BEST_BONE, Offsets::HEAD, Offsets::SPINE1, Offsets::ROOT, Offsets::LEFT_SHOULDER, Offsets::RIGHT_SHOULDER };
+                    static const char* boneNames = "Best Bone\0Head\0Torso\0Pelvis\0Left Shoulder\0Right Shoulder\0";
                     int boneIdx = 0;
                     for (int i = 0; i < 6; i++) if (*targetBone == boneMap[i]) { boneIdx = i; break; }
                     if (ImGui::Combo("Target Bone", &boneIdx, boneNames)) *targetBone = boneMap[boneIdx];
@@ -193,14 +193,24 @@ private:
                     for (int i = 0; i < 6; i++) if (*shieldBone == boneMap3[i]) { boneIdx3 = i; break; }
                     if (ImGui::Combo("Shield Aim Bone", &boneIdx3, boneNames3)) *shieldBone = boneMap3[boneIdx3];
                 }
-                TL("Bone Override", boneOverride, "Hold a key to force a specific bone");
+                TL("Bone Override", boneOverride, "Hold a key/controller button to force a specific bone");
                 if (*boneOverride) {
-                    ImGui::SliderInt("Bone Override Key", boneOverrideKey, 1, 255, "VK %d");
-                    int boneMap2[6] = { Offsets::ROOT, Offsets::NECK, Offsets::SPINE1, Offsets::HEAD, Offsets::LEFT_KNEE, Offsets::RIGHT_KNEE };
-                    static const char* boneNames2 = "Feet\0Neck\0Chest\0Head\0Left Knee\0Right Knee\0";
+                    int boneMap2[20] = {
+                        Offsets::NECK, Offsets::SPINE1, Offsets::SPINE2, Offsets::SPINE3, Offsets::CHEST,
+                        Offsets::LEFT_KNEE, Offsets::RIGHT_KNEE, Offsets::LEFT_HIP, Offsets::RIGHT_HIP,
+                        Offsets::LEFT_ELBOW, Offsets::RIGHT_ELBOW, Offsets::LEFT_HAND, Offsets::RIGHT_HAND,
+                        Offsets::LEFT_FOOT, Offsets::RIGHT_FOOT, Offsets::ROOT,
+                        Offsets::LEFT_SHOULDER, Offsets::RIGHT_SHOULDER, Offsets::HEAD, Offsets::BEST_BONE };
+                    static const char* boneNames2 =
+                        "Neck\0Chest\0Upper Spine\0Mid Spine\0Torso\0"
+                        "Left Knee\0Right Knee\0Left Hip\0Right Hip\0"
+                        "Left Elbow\0Right Elbow\0Left Hand\0Right Hand\0"
+                        "Left Foot\0Right Foot\0Pelvis\0"
+                        "Left Shoulder\0Right Shoulder\0Head\0Best Bone\0";
                     int boneIdx2 = 0;
-                    for (int i = 0; i < 6; i++) if (*boneOverrideId == boneMap2[i]) { boneIdx2 = i; break; }
+                    for (int i = 0; i < 20; i++) if (*boneOverrideId == boneMap2[i]) { boneIdx2 = i; break; }
                     if (ImGui::Combo("Override Bone", &boneIdx2, boneNames2)) *boneOverrideId = boneMap2[boneIdx2];
+                    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Bind it in Keybind Editor (keyboard or controller)");
                 }
                 TL("Auto Scope", autoScope, "ADS while a target is locked");
                 TL("Zoom FOV", zoomFOV, "Shrink aim FOV while scoped for precision");

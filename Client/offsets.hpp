@@ -58,6 +58,7 @@ namespace Offsets {
 
     // ============ BONE IDs ============
     enum BoneID : int {
+        BEST_BONE = -1,       // auto: range-aware selection (head/neck/chest)
         ROOT = 0,
         SPINE1 = 6,
         NECK = 7,
