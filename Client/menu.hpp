@@ -58,6 +58,7 @@ private:
 
     bool* aimbotEnabled, *silentAimEnabled, *triggerbotEnabled, *triggerAdvanced;
     bool* headshotOnly, *wallBang; float *aimFOV, *aimSmooth; int *targetBone;
+    float *aimMaxDistance;
     float *silentFOV; bool *silentHeadshot; int *triggerDelay;
     bool *triggerAutoShoot, *drawFovCircle, *bulletTracking;
     int *aimMode;
@@ -157,6 +158,7 @@ private:
             if (*aimbotEnabled) {
                 ImGui::SliderFloat("FOV", aimFOV, 0.5f, 90.0f, "%.1f");
                 ImGui::SliderFloat("Smoothness", aimSmooth, 0.01f, 0.50f, "%.3f");
+                ImGui::SliderFloat("Max Distance (m)", aimMaxDistance, 10.0f, 5000.0f, "%.0f");
                 TL("Headshot Only", headshotOnly, "Only lock onto the head bone"); T("Wall Bang", wallBang, "Allow targets through walls");
                 ImGui::Combo("Target Mode", aimMode, "All\0Players Only\0AI Only\0Boss Priority\0");
                 if (!*headshotOnly) {
@@ -469,13 +471,14 @@ public:
     void SetPlayerData(const std::vector<Player>* players, int team) { playersRef = players; localTeam = team; }
 
     Menu() : open(true), activeTab(0), openAnim(1.0f), tabAnim(0), time(0), keybindEditorOpen(false),
-        searchBuf{0}, accent(0.00f,0.85f,1.00f,1.0f), accentR(nullptr), accentG(nullptr), accentB(nullptr) {}
+        searchBuf{0}, accent(0.00f,0.90f,1.00f,1.0f), accentR(nullptr), accentG(nullptr), accentB(nullptr) {}
 
     void Setup() { ApplyStyle(); }
 
     void Init(
         bool* ab, bool* sa, bool* tr, bool* ta, bool* hs, bool* wb,
         float* af, float* asmth, int* tb, float* sf, bool* sh, int* td, bool* tau, bool* dfc, bool* bt, int* am,
+        float* amd,
         bool* stt, bool* aw, bool* bb, bool* bo, int* bok, int* boid, float* ho,
         bool* avo, bool* rsb, int* sb,
         bool* asc, bool* zf, float* zfct, bool* ash, bool* rc, float* rs_,
@@ -519,6 +522,7 @@ public:
         if (accentR && accentG && accentB) accent = ImVec4(*accentR, *accentG, *accentB, 1.0f);
         aimbotEnabled=ab; silentAimEnabled=sa; triggerbotEnabled=tr; triggerAdvanced=ta;
         headshotOnly=hs; wallBang=wb;         aimFOV=af; aimSmooth=asmth; targetBone=tb;
+        aimMaxDistance=amd;
         silentFOV=sf; silentHeadshot=sh; triggerDelay=td; triggerAutoShoot=tau;
         drawFovCircle=dfc; bulletTracking=bt; aimMode=am;
         stickToTarget=stt; autoWall=aw; bestBone=bb; boneOverride=bo; boneOverrideKey=bok; boneOverrideId=boid;
@@ -598,7 +602,9 @@ public:
         const float sbW = 150.0f;
         ImGui::SetCursorPos(ImVec2(8, 56)); ImGui::BeginGroup();
         draw->AddRectFilled(ImVec2(wPos.x + 4, wPos.y + 54), ImVec2(wPos.x + sbW + 6, wPos.y + wSize.y - 32),
-            ImColor(0.03f, 0.035f, 0.05f, 0.60f), 5.0f);
+            ImColor(0.094f, 0.078f, 0.204f, 0.60f), 5.0f);
+        draw->AddRect(ImVec2(wPos.x + 4, wPos.y + 54), ImVec2(wPos.x + sbW + 6, wPos.y + wSize.y - 32),
+            ImColor(accent.x, accent.y, accent.z, 0.35f), 5.0f);
         const char* lbl[] = {"AIM","VIS","WEP","RAD","MOVE","AA","CAM","DMZ","CFG","PLY"};
         const char* icn[] = {"\xe2\x9b\x85","\xf0\x9f\x91\x81","\xe2\x99\xaa","\xf0\x9f\x93\xa1","\xf0\x9f\x8f\x83","\xf0\x9f\x8e\xaf","\xf0\x9f\x93\xb7","\xf0\x9f\x92\xa3","\xe2\x9a\x99\xef\xb8\x8f","\xf0\x9f\x91\xa5"};
         for (int i=0;i<10;i++) MenuUI::SidebarTab(accent, activeTab==i, lbl[i], icn[i], i, 10);

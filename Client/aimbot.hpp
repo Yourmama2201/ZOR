@@ -36,6 +36,7 @@ private:
     bool autoShoot;
     bool recoilComp;
     float recoilStrength;
+    float maxDistance;
     bool wasScoped;
     DWORD lastShot;
 
@@ -85,7 +86,7 @@ public:
         boneOverrideId(Offsets::HEAD), lockedTarget(0), headOffset(0.0f),
         visibleOnly(false), riotShieldBypass(true), shieldBone(Offsets::LEFT_KNEE),
         autoScope(false), zoomFOV(false), zoomFactor(0.5f), autoShoot(false),
-        recoilComp(false), recoilStrength(1.0f), wasScoped(false), lastShot(0) {}
+        recoilComp(false), recoilStrength(1.0f), maxDistance(5000.0f), wasScoped(false), lastShot(0) {}
 
     void Run(std::vector<Player>& players, Vec3 localPos, int localTeam) {
         if (!enabled || !mem || players.empty()) return;
@@ -124,6 +125,7 @@ public:
             Vec3 delta = targetPos - localPos;
             float distance = delta.Length();
             if (distance < 1.0f) continue;
+            if (distance > maxDistance) continue;
 
             Vec3 angle = Math::CalculateAngle(localPos, targetPos);
             float fovDist = Math::GetFOV(viewAngles, angle);
@@ -194,6 +196,7 @@ public:
     void SetWallBang(bool w) { wallBang = w; }
     void SetFOV(float f) { fov = f; }
     void SetSmoothness(float s) { smoothness = s; }
+    void SetMaxDistance(float d) { maxDistance = d; }
     void SetTargetBone(int b) { targetBone = b; }
     void SetAimMode(int m) { aimMode = m; }
     void SetBulletTracking(bool b) { bulletTracking = b; }

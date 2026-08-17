@@ -5,6 +5,11 @@
 
 namespace MenuUI {
 
+// Loader neon palette constants (match ZORLoader.cpp).
+static const ImU32 LOADER_CYAN = IM_COL32(0, 229, 255, 255);
+static const ImU32 LOADER_PINK = IM_COL32(255, 0, 128, 255);
+static const ImU32 LOADER_PURPLE = IM_COL32(124, 0, 255, 255);
+
 // Sidebar nav tab: full-width vertical button, active gets accent left bar +
 // subtle bg tint. Returns true if clicked.
 inline bool SidebarTab(const ImVec4& accent, bool selected, const char* label,
@@ -12,7 +17,7 @@ inline bool SidebarTab(const ImVec4& accent, bool selected, const char* label,
     (void)idx; (void)count;
     float w = ImGui::GetContentRegionAvail().x;
     std::string full = std::string(icon) + "  " + label;
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
     ImGui::PushStyleColor(ImGuiCol_Button,
         selected ? (ImVec4)ImColor(accent.x, accent.y, accent.z, 0.16f) : ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor(accent.x, accent.y, accent.z, 0.12f));
@@ -75,7 +80,7 @@ inline void Switch(const ImVec4& accent, const char* l, bool* v) {
     ImVec2 mn = ImGui::GetCursorScreenPos();
     ImDrawList* d = ImGui::GetWindowDrawList();
     ImU32 box = on ? ImGui::ColorConvertFloat4ToU32(ImVec4(accent.x, accent.y, accent.z, 0.95f))
-                   : ImGui::ColorConvertFloat4ToU32(ImVec4(0.12f, 0.13f, 0.19f, 0.95f));
+                   : ImGui::ColorConvertFloat4ToU32(ImVec4(0.094f, 0.078f, 0.204f, 0.95f));
     d->AddRectFilled(mn, ImVec2(mn.x + sz.x, mn.y + sz.y), box, 3.0f);
     d->AddRect(mn, ImVec2(mn.x + sz.x, mn.y + sz.y),
         ImColor(accent.x, accent.y, accent.z, on ? 0.55f : 0.35f), 3.0f);
@@ -90,12 +95,15 @@ inline void Switch(const ImVec4& accent, const char* l, bool* v) {
     ImGui::TextUnformatted(l);
 }
 
-// Slim professional header: logo + version + status, accent underline.
+// Loader-matched header: dark navy bar, cyan top line, magenta "ZORMENU" logo.
 inline void DrawHeader(ImDrawList* draw, ImVec2 wPos, ImVec2 wSize, const ImVec4& accent,
                        float time, bool connected, int pc, int vc, int lh, int la) {
     (void)time;
-    draw->AddRectFilled(ImVec2(wPos.x, wPos.y), ImVec2(wPos.x + wSize.x, wPos.y + 48),
-        ImColor(0.035f, 0.04f, 0.055f, 0.98f));
+    // top neon line (cyan -> magenta gradient like the loader)
+    draw->AddRectFilled(ImVec2(wPos.x, wPos.y), ImVec2(wPos.x + wSize.x * 0.55f, wPos.y + 3), LOADER_CYAN);
+    draw->AddRectFilled(ImVec2(wPos.x + wSize.x * 0.55f, wPos.y), ImVec2(wPos.x + wSize.x, wPos.y + 3), LOADER_PINK);
+    draw->AddRectFilled(ImVec2(wPos.x, wPos.y + 3), ImVec2(wPos.x + wSize.x, wPos.y + 48),
+        ImColor(0.031f, 0.031f, 0.086f, 0.98f));
     draw->AddRectFilled(ImVec2(wPos.x, wPos.y + 48), ImVec2(wPos.x + wSize.x, wPos.y + 49),
         ImColor(accent.x, accent.y, accent.z, 0.75f));
 
@@ -116,18 +124,18 @@ inline void DrawHeader(ImDrawList* draw, ImVec2 wPos, ImVec2 wSize, const ImVec4
         "P: %d    V: %d    HP: %d    ARMOR: %d", pc, vc, lh, la);
 }
 
-// Footer status bar: player count / version / support line.
+// Loader-matched footer: magenta "made by eddie" tagline.
 inline void DrawFooter(ImDrawList* draw, ImVec2 wPos, ImVec2 wSize, const ImVec4& accent,
                        int pc, int vc) {
     float fh = 24.0f;
     draw->AddRectFilled(ImVec2(wPos.x, wPos.y + wSize.y - fh), ImVec2(wPos.x + wSize.x, wPos.y + wSize.y),
-        ImColor(0.035f, 0.04f, 0.055f, 0.98f));
+        ImColor(0.031f, 0.031f, 0.086f, 0.98f));
     draw->AddRectFilled(ImVec2(wPos.x, wPos.y + wSize.y - fh - 1), ImVec2(wPos.x + wSize.x, wPos.y + wSize.y - fh),
         ImColor(accent.x, accent.y, accent.z, 0.45f));
     ImGui::SetCursorPos(ImVec2(12, wSize.y - 20));
     ImGui::TextColored(ImVec4(0.52f, 0.54f, 0.64f, 1.0f), "PC: %d    VEH: %d", pc, vc);
     ImGui::SameLine(wSize.x - 250);
-    ImGui::TextColored(ImVec4(0.38f, 0.40f, 0.50f, 1.0f), "ZOR v4.0  //  made by eddie");
+    ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.86f, 1.0f), "ZOR v4.0  //  made by eddie");
 }
 
 } // namespace MenuUI

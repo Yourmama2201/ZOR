@@ -32,7 +32,7 @@ bool  g_aimbotEnabled = true, g_silentAimEnabled = false,
       g_triggerbotEnabled = false, g_trackAimEnabled = false,
       g_headshotOnly = false, g_wallBang = false,
       g_drawFovCircle = false, g_bulletTracking = true;
-float g_aimFOV = 30.0f, g_aimSmooth = 0.05f, g_silentFOV = 15.0f;
+float g_aimFOV = 30.0f, g_aimSmooth = 0.05f, g_silentFOV = 15.0f, g_aimMaxDistance = 5000.0f;
 int   g_targetBone = Offsets::HEAD, g_triggerDelay = 20,
       g_aimPriority = 0, g_aimMode = 0;
 bool  g_silentHeadshot = true, g_triggerAutoShoot = false;
@@ -368,6 +368,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         &g_headshotOnly,&g_wallBang,&g_aimFOV,&g_aimSmooth,&g_targetBone,
         &g_silentFOV,&g_silentHeadshot,&g_triggerDelay,&g_triggerAutoShoot,
         &g_drawFovCircle,&g_bulletTracking,&g_aimMode,
+        &g_aimMaxDistance,
         &g_stickToTarget,&g_autoWall,&g_bestBone,&g_boneOverride,
         &g_boneOverrideKey,&g_boneOverrideId,&g_headOffset,
         &g_aimVisibleOnly,&g_riotShieldBypass,&g_shieldBone,

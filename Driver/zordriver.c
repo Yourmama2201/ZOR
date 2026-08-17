@@ -347,22 +347,29 @@ static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
     if (!targetPid) return STATUS_INVALID_PARAMETER;
 
     ULONG bufSize = 0x10000;
+    ULONG retLen = 0;
     PVOID procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
     if (!procBuf) return STATUS_INSUFFICIENT_RESOURCES;
 
-    NTSTATUS ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+    NTSTATUS ns = ZwQuerySystemInformation(5, procBuf, bufSize, &retLen);
     if (ns == STATUS_INFO_LENGTH_MISMATCH) {
         ExFreePool(procBuf);
         bufSize = 0x20000;
+        retLen = 0;
         procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
         if (!procBuf) return STATUS_INSUFFICIENT_RESOURCES;
-        ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+        ns = ZwQuerySystemInformation(5, procBuf, bufSize, &retLen);
     }
 
     if (!NT_SUCCESS(ns)) {
         ExFreePool(procBuf);
         return ns;
     }
+    if (retLen == 0 || retLen > bufSize) {
+        ExFreePool(procBuf);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if (retLen < bufSize) bufSize = retLen;
 
     struct _SPI {
         ULONG NextEntryOffset;
@@ -417,7 +424,9 @@ static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
 
     NTSTATUS result = STATUS_NOT_FOUND;
     PUCHAR p = (PUCHAR)procBuf;
+    PUCHAR bufEnd = (PUCHAR)procBuf + bufSize;
     for (;;) {
+        if ((ULONG_PTR)(p + sizeof(struct _SPI)) > (ULONG_PTR)bufEnd) break;
         struct _SPI* spi = (struct _SPI*)p;
         if ((ULONG_PTR)spi->UniqueProcessId == (ULONG_PTR)targetPid) {
             struct _STI* threads = (struct _STI*)((PUCHAR)spi + sizeof(struct _SPI));
@@ -425,8 +434,13 @@ static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
             // returns to user mode soon and picks up our hijacked context.
             // ThreadState 5 (Waiting) threads may be parked in a kernel wait
             // and never come back, so only use them as a last resort.
+            // Bound the thread array to the actual buffer so a corrupted
+            // NumberOfThreads can never walk past the allocation (0x13A BSOD).
+            SIZE_T maxThreads = (SIZE_T)((bufEnd - (PUCHAR)threads) / sizeof(struct _STI));
+            ULONG threadCount = spi->NumberOfThreads;
+            if (threadCount > maxThreads) threadCount = (ULONG)maxThreads;
             ULONG fallback = 0xFFFFFFFF;
-            for (ULONG i = 0; i < spi->NumberOfThreads && i < 256; i++) {
+            for (ULONG i = 0; i < threadCount && i < 256; i++) {
                 struct _STI* t = &threads[i];
                 if (!t->ClientId.UniqueThread) continue;
                 if (t->ThreadState == 1 || t->ThreadState == 2 || t->ThreadState == 3) {
@@ -445,7 +459,8 @@ static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
             }
             break;
         }
-        if (spi->NextEntryOffset == 0) break;
+        if (spi->NextEntryOffset < sizeof(struct _SPI)) break;
+        if ((ULONG_PTR)(p + spi->NextEntryOffset) > (ULONG_PTR)bufEnd) break;
         p += spi->NextEntryOffset;
     }
 
@@ -900,18 +915,20 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
 
         HANDLE foundPid = NULL;
         ULONG bufSize = 0x10000;
+        ULONG retLen = 0;
         PVOID procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
         if (!procBuf) { RtlFreeUnicodeString(&targetU); break; }
 
-        NTSTATUS ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+        NTSTATUS ns = ZwQuerySystemInformation(5, procBuf, bufSize, &retLen);
         if (ns == STATUS_INFO_LENGTH_MISMATCH) {
             ExFreePool(procBuf);
             bufSize = 0x20000;
+            retLen = 0;
             procBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufSize, 0x4E445550);
-            if (procBuf) ns = ZwQuerySystemInformation(5, procBuf, bufSize, NULL);
+            if (procBuf) ns = ZwQuerySystemInformation(5, procBuf, bufSize, &retLen);
         }
 
-        if (NT_SUCCESS(ns) && procBuf) {
+        if (NT_SUCCESS(ns) && procBuf && retLen > 0 && retLen <= bufSize) {
             struct _SPI {
                 ULONG NextEntryOffset;
                 ULONG NumberOfThreads;
@@ -930,7 +947,9 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
                 SIZE_T WorkingSetSize;
             };
             PUCHAR p = (PUCHAR)procBuf;
+            PUCHAR bufEnd = (PUCHAR)procBuf + bufSize;
             for (;;) {
+                if ((ULONG_PTR)(p + sizeof(struct _SPI)) > (ULONG_PTR)bufEnd) break;
                 struct _SPI* spi = (struct _SPI*)p;
                 if (spi->ImageName.Buffer && spi->ImageName.Length && spi->UniqueProcessId) {
                     PWCHAR namePart = spi->ImageName.Buffer;
@@ -945,7 +964,8 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
                         break;
                     }
                 }
-                if (spi->NextEntryOffset == 0) break;
+                if (spi->NextEntryOffset < sizeof(struct _SPI)) break;
+                if ((ULONG_PTR)(p + spi->NextEntryOffset) > (ULONG_PTR)bufEnd) break;
                 p += spi->NextEntryOffset;
             }
         }

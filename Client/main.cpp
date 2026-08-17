@@ -139,7 +139,7 @@ bool  g_aimbotEnabled = true, g_silentAimEnabled = false,
       g_headshotOnly = false, g_wallBang = false,
       g_drawFovCircle = false, g_bulletTracking = true;
 float g_aimFOV = 30.0f, g_aimSmooth = 0.05f, g_silentFOV = 15.0f,
-      g_headOffset = 0.0f;
+      g_headOffset = 0.0f, g_aimMaxDistance = 5000.0f;
 int   g_targetBone = Offsets::HEAD, g_triggerDelay = 20,
       g_aimPriority = 0, g_aimMode = 0;
 bool  g_silentHeadshot = true, g_triggerAutoShoot = false;
@@ -270,7 +270,7 @@ void SaveConfig() {
     sf("sfov",g_silentFOV); s("shead",g_silentHeadshot); si("tdelay",g_triggerDelay);
     s("tauto",g_triggerAutoShoot); s("fovcirc",g_drawFovCircle); si("aimode",g_aimMode);
     s("bullet",g_bulletTracking);
-    sf("headoff",g_headOffset);
+    sf("headoff",g_headOffset); sf("maxdist",g_aimMaxDistance);
     s("aimvo",g_aimVisibleOnly); s("rsb",g_riotShieldBypass); si("shbone",g_shieldBone);
     s("ascope",g_autoScope); s("zoomfov",g_zoomFOV); sf("zoomfct",g_zoomFactor);
     s("autoshoot",g_autoShoot); s("recoilcomp",g_recoilComp); sf("recoilstr",g_recoilStrength);
@@ -327,7 +327,7 @@ void LoadConfig() {
     g_silentFOV=f("sfov",15); g_silentHeadshot=b("shead",1); g_triggerDelay=i("tdelay",20);
     g_triggerAutoShoot=b("tauto",0); g_drawFovCircle=b("fovcirc",0); g_aimMode=i("aimode",0);
     g_bulletTracking=b("bullet",1);
-    g_headOffset=f("headoff",0);
+    g_headOffset=f("headoff",0); g_aimMaxDistance=f("maxdist",5000);
     g_aimVisibleOnly=b("aimvo",0); g_riotShieldBypass=b("rsb",1); g_shieldBone=i("shbone",Offsets::LEFT_KNEE);
     g_autoScope=b("ascope",0); g_zoomFOV=b("zoomfov",0); g_zoomFactor=f("zoomfct",0.5f);
     g_autoShoot=b("autoshoot",0); g_recoilComp=b("recoilcomp",0); g_recoilStrength=f("recoilstr",1.0f);
@@ -445,6 +445,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
         &g_headshotOnly,&g_wallBang,&g_aimFOV,&g_aimSmooth,&g_targetBone,
         &g_silentFOV,&g_silentHeadshot,&g_triggerDelay,&g_triggerAutoShoot,
         &g_drawFovCircle,&g_bulletTracking,&g_aimMode,
+        &g_aimMaxDistance,
         &g_stickToTarget,&g_autoWall,&g_bestBone,&g_boneOverride,
         &g_boneOverrideKey,&g_boneOverrideId,&g_headOffset,
         &g_aimVisibleOnly,&g_riotShieldBypass,&g_shieldBone,
@@ -574,6 +575,7 @@ g_discordRPC->SetStatus("zor - the best cheat known :)", "dominating the lobby",
             g_aimbot->SetEnabled(g_aimbotEnabled); g_aimbot->SetHeadshotOnly(g_headshotOnly);
             g_aimbot->SetWallBang(g_wallBang); g_aimbot->SetFOV(g_aimFOV);
             g_aimbot->SetSmoothness(g_aimSmooth); g_aimbot->SetAimMode(g_aimMode);
+            g_aimbot->SetMaxDistance(g_aimMaxDistance);
             g_aimbot->SetBulletTracking(g_bulletTracking);
             g_aimbot->SetStickToTarget(g_stickToTarget); g_aimbot->SetAutoWall(g_autoWall);
             g_aimbot->SetBestBone(g_bestBone); g_aimbot->SetBoneOverride(g_boneOverride);
