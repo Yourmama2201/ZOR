@@ -11,10 +11,55 @@
 #include <cstring>
 
 // =================================================================
+// 0. STRING ENCRYPTION - strings are XOR-encrypted at COMPILE TIME
+//    (stored obfuscated in the binary) and only decrypted at runtime,
+//    so nothing readable shows up in a hex dump / IDA strings view.
+// =================================================================
+namespace {
+    template<size_t N>
+    struct ObfStr {
+        char data[N];
+        unsigned char key;
+        constexpr ObfStr(const char(&s)[N], unsigned char k) : data{}, key(k) {
+            for (size_t i = 0; i < N; ++i)
+                data[i] = (char)((unsigned char)s[i] ^ (unsigned char)(k + i));
+        }
+        std::string dec() const {
+            std::string out(N - 1, '\0');
+            for (size_t i = 0; i < N - 1; ++i)
+                out[i] = (char)((unsigned char)data[i] ^ (unsigned char)(key + i));
+            return out;
+        }
+    };
+
+    template<size_t N>
+    struct ObfStrW {
+        wchar_t data[N];
+        unsigned char key;
+        constexpr ObfStrW(const wchar_t(&s)[N], unsigned char k) : data{}, key(k) {
+            for (size_t i = 0; i < N; ++i)
+                data[i] = (wchar_t)((unsigned)s[i] ^ (unsigned)(k + i));
+        }
+        std::wstring dec() const {
+            std::wstring out(N - 1, L'\0');
+            for (size_t i = 0; i < N - 1; ++i)
+                out[i] = (wchar_t)((unsigned)data[i] ^ (unsigned)(key + i));
+            return out;
+        }
+    };
+}
+
+// Encrypt at compile time, decrypt into a std::string at runtime.
+// The constexpr local forces MSVC to fully evaluate the cipher at compile
+// time so the plaintext literal is folded away and never lands in .rdata.
+#define OBF(s) ([]() -> std::string { constexpr auto _e = ::ObfStr<sizeof(s)>(s, 0x5A); return _e.dec(); }())
+#define OBFW(s) ([]() -> std::wstring { constexpr auto _e = ::ObfStrW<sizeof(s) / sizeof(wchar_t)>(s, 0x6B); return _e.dec(); }())
+
+// =================================================================
 // 1. SECRET KEY - DO NOT SHARE THIS WITH ANYONE!
 // =================================================================
-static const std::string SECRET_KEY = "key1111111";
-static const std::string LICENSE_FILE = "license.lic";
+static const std::string SECRET_KEY = OBF("key1111111");
+static const std::string LICENSE_FILE = OBF("license.lic");
 
 // =================================================================
 // 2. SIMPLE XOR ENCRYPTION
@@ -44,9 +89,9 @@ void GenerateLicense(int days) {
             file << std::hex << std::setw(2) << std::setfill('0') << (int)c;
         }
         file.close();
-        MessageBoxA(NULL, ("License generated for " + std::to_string(days) + " days.\nFile: " + LICENSE_FILE).c_str(), "Success", MB_OK);
+        MessageBoxA(NULL, (OBF("License generated for ") + std::to_string(days) + OBF(" days.\nFile: ") + LICENSE_FILE).c_str(), OBF("Success").c_str(), MB_OK);
     } else {
-        MessageBoxA(NULL, "Failed to write the license file!", "Error", MB_ICONERROR);
+        MessageBoxA(NULL, OBF("Failed to write the license file!").c_str(), OBF("Error").c_str(), MB_ICONERROR);
     }
 }
 
@@ -55,7 +100,7 @@ void GenerateLicense(int days) {
 // =================================================================
 bool ValidateLicense() {
     if (!std::filesystem::exists(LICENSE_FILE)) {
-        MessageBoxA(NULL, "License file (license.lic) not found!\nRun the loader with --gen [days] to create one.", "License", MB_OK | MB_ICONERROR);
+        MessageBoxA(NULL, OBF("License file (license.lic) not found!\nRun the loader with --gen [days] to create one.").c_str(), OBF("License").c_str(), MB_OK | MB_ICONERROR);
         return false;
     }
 
@@ -77,7 +122,7 @@ bool ValidateLicense() {
 
     size_t delim = decrypted.find('|');
     if (delim == std::string::npos) {
-        MessageBoxA(NULL, "Corrupted license file!", "Error", MB_ICONERROR);
+        MessageBoxA(NULL, OBF("Corrupted license file!").c_str(), OBF("Error").c_str(), MB_ICONERROR);
         return false;
     }
 
@@ -87,12 +132,12 @@ bool ValidateLicense() {
     time_t currentTime = std::chrono::system_clock::to_time_t(now);
 
     if (currentTime > expiryTime) {
-        MessageBoxA(NULL, "License has expired!", "Expired", MB_OK | MB_ICONERROR);
+        MessageBoxA(NULL, OBF("License has expired!").c_str(), OBF("Expired").c_str(), MB_OK | MB_ICONERROR);
         return false;
     }
 
     if (currentTime < expiryTime - 60 * 60 * 24 * 365 * 10) {
-        MessageBoxA(NULL, "System date is incorrect!", "Error", MB_ICONERROR);
+        MessageBoxA(NULL, OBF("System date is incorrect!").c_str(), OBF("Error").c_str(), MB_ICONERROR);
         return false;
     }
 
@@ -298,13 +343,13 @@ bool ManualMapInject(DWORD processId, const std::vector<BYTE>& dllBuffer) {
     const IMAGE_NT_HEADERS64* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(dllBuffer.data() + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
     if (nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) {
-        MessageBoxW(NULL, L"The DLL must be a 64-bit (x64) binary!", L"Error", MB_ICONERROR);
+        MessageBoxW(NULL, OBFW(L"The DLL must be a 64-bit (x64) binary!").c_str(), OBFW(L"Error").c_str(), MB_ICONERROR);
         return false;
     }
 
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
     if (!hProcess) {
-        MessageBoxW(NULL, L"Failed to open the process!\nRun as Administrator.", L"Error", MB_ICONERROR);
+        MessageBoxW(NULL, OBFW(L"Failed to open the process!\nRun as Administrator.").c_str(), OBFW(L"Error").c_str(), MB_ICONERROR);
         return false;
     }
 
@@ -427,8 +472,8 @@ bool ManualMapInject(DWORD processId, const std::vector<BYTE>& dllBuffer) {
         havePdata  = true;
     }
 
-    uintptr_t ntdllBase = (uintptr_t)GetRemoteModuleBase(processId, L"ntdll.dll");
-    uintptr_t rtlAddFuncTable = havePdata ? GetRemoteExport(hProcess, ntdllBase, "RtlAddFunctionTable") : 0;
+    uintptr_t ntdllBase = (uintptr_t)GetRemoteModuleBase(processId, OBFW(L"ntdll.dll").c_str());
+    uintptr_t rtlAddFuncTable = havePdata ? GetRemoteExport(hProcess, ntdllBase, OBF("RtlAddFunctionTable").c_str()) : 0;
 
     // ---- Build the stub and launch it ----
     ManualMapStub stub = {};
@@ -486,7 +531,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 3 && strcmp(argv[1], "--gen") == 0) {
         int days = atoi(argv[2]);
         if (days <= 0) {
-            MessageBoxA(NULL, "Enter a valid number of days (e.g. --gen 30)", "Error", MB_ICONERROR);
+            MessageBoxA(NULL, OBF("Enter a valid number of days (e.g. --gen 30)").c_str(), OBF("Error").c_str(), MB_ICONERROR);
             return 1;
         }
         GenerateLicense(days);
@@ -501,13 +546,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const std::wstring gameProcess = L"cod.exe"; // CHANGE THIS TO YOUR GAME!
+    const std::wstring gameProcess = OBFW(L"cod.exe"); // CHANGE THIS TO YOUR GAME!
 
     const int resourceId = 101;
 
     std::vector<BYTE> dllBuffer;
     if (!ExtractResourceToMemory(resourceId, dllBuffer)) {
-        MessageBoxW(NULL, L"DLL resource not found in the EXE!\nAdd a resource.rc with IDR_DLL1.", L"Fatal error", MB_ICONERROR);
+        MessageBoxW(NULL, OBFW(L"DLL resource not found in the EXE!\nAdd a resource.rc with IDR_DLL1.").c_str(), OBFW(L"Fatal error").c_str(), MB_ICONERROR);
         return 1;
     }
 
@@ -518,7 +563,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!ManualMapInject(pid, dllBuffer)) {
-        MessageBoxW(NULL, L"Injection failed!", L"Error", MB_ICONERROR);
+        MessageBoxW(NULL, OBFW(L"Injection failed!").c_str(), OBFW(L"Error").c_str(), MB_ICONERROR);
         return 1;
     }
 
