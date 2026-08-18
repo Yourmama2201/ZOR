@@ -39,6 +39,21 @@ NTSTATUS ZwQueryInformationProcess(
     PULONG ReturnLength
 );
 
+NTSTATUS ZwProtectVirtualMemory(
+    HANDLE ProcessHandle,
+    PVOID* BaseAddress,
+    PSIZE_T RegionSize,
+    ULONG NewProtect,
+    PULONG OldProtect
+);
+
+NTSTATUS ZwFreeVirtualMemory(
+    HANDLE ProcessHandle,
+    PVOID* BaseAddress,
+    PSIZE_T RegionSize,
+    ULONG FreeType
+);
+
 // Import resolution is done entirely via memory reads of the TARGET process's
 // already-loaded modules (we are attached to the target, so its user memory is
 // dereferenceable). We NEVER call user-mode ntdll functions from kernel mode
@@ -207,7 +222,9 @@ static void RandomDelay() {
 // walks that module's export directory (all direct reads of the target's user
 // memory while attached). Writes resolved addresses straight into the remote
 // IAT. No syscalls, no locks, no user-mode ntdll calls from CPL0.
-static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
+static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt, WCHAR* failModule, ULONG* failReason) {
+    if (failModule) failModule[0] = 0;
+    if (failReason) *failReason = 0;
     DWORD importRVA = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
     if (!importRVA) return STATUS_SUCCESS;
 
@@ -224,7 +241,11 @@ static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
             for (; moduleName[wlen] && wlen < 126; wlen++) wideName[wlen] = (WCHAR)(UCHAR)moduleName[wlen];
 
             ULONG_PTR hModule = FindLoadedModuleBase(wideName);
-            if (!hModule) return STATUS_MODULE_NOT_FOUND;
+            if (!hModule) {
+                if (failModule && wideName[0]) RtlCopyMemory(failModule, wideName, (wlen + 1) * sizeof(WCHAR));
+                if (failReason) *failReason = 1;
+                return STATUS_MODULE_NOT_FOUND;
+            }
 
             // Read the module's PE headers from the target.
             PIMAGE_DOS_HEADER mdos = (PIMAGE_DOS_HEADER)hModule;
@@ -249,7 +270,10 @@ static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
                 if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
                     // Import by ordinal.
                     WORD ord = (WORD)(thunk->u1.Ordinal & 0xFFFF);
-                    if (ord >= ed->NumberOfFunctions) return STATUS_PROCEDURE_NOT_FOUND;
+                    if (ord >= ed->NumberOfFunctions) {
+                        if (failReason) *failReason = 2;
+                        return STATUS_PROCEDURE_NOT_FOUND;
+                    }
                     func = (PVOID)(hModule + funcs[ord]);
                 }
                 else {
@@ -268,7 +292,11 @@ static NTSTATUS ResolveImportsRemotely(PVOID pRemoteDll, PIMAGE_NT_HEADERS nt) {
                             break;
                         }
                     }
-                    if (!found) return STATUS_PROCEDURE_NOT_FOUND;
+                    if (!found) {
+                        if (failModule && wideName[0]) RtlCopyMemory(failModule, wideName, (wlen + 1) * sizeof(WCHAR));
+                        if (failReason) *failReason = 2;
+                        return STATUS_PROCEDURE_NOT_FOUND;
+                    }
                 }
 
                 iat->u1.Function = (ULONGLONG)func;
@@ -323,13 +351,16 @@ NTSTATUS InjectDLL_Allocate(HANDLE pid, SIZE_T sizeOfImage, PVOID* outBase) {
     KAPC_STATE apcState;
     KeStackAttachProcess(process, &apcState);
 
+    // Allocate WRITE-ONLY first (never RWX at allocation time - a single
+    // fully-executable image region is the #1 giveaway to memory scanners).
+    // Protections are set per-section (RX/RW/R) in InjectDLL_Exec later.
     PVOID pRemoteDll = NULL;
     SIZE_T regionSize = sizeOfImage;
     status = ZwAllocateVirtualMemory(
         NtCurrentProcess(),
         &pRemoteDll, 0, &regionSize,
         MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE
+        PAGE_READWRITE
     );
 
     KeUnstackDetachProcess(&apcState);
@@ -468,7 +499,42 @@ static NTSTATUS FindTargetThread(PEPROCESS process, ULONG_PTR* outThreadId) {
     return result;
 }
 
-NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
+// Apply per-section memory protections to a manually-mapped image so the
+// region is NOT one big RWX block. .text -> RX, .rdata -> R, .data -> RW.
+// Run while attached to the target process.
+static NTSTATUS ProtectImageSections(PVOID imageBase, PIMAGE_NT_HEADERS nt) {
+    // Headers -> read-only.
+    PVOID hdrBase = imageBase;
+    SIZE_T hdrSize = nt->OptionalHeader.SizeOfHeaders;
+    ULONG oldProt = 0;
+    NTSTATUS st = ZwProtectVirtualMemory(NtCurrentProcess(), &hdrBase, &hdrSize, PAGE_READONLY, &oldProt);
+
+    PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        ULONG prot = PAGE_READONLY;
+        if (sec->Characteristics & IMAGE_SCN_MEM_EXECUTE) prot = PAGE_EXECUTE_READ;
+        if (sec->Characteristics & IMAGE_SCN_MEM_WRITE) prot = PAGE_READWRITE;
+        if ((sec->Characteristics & IMAGE_SCN_MEM_EXECUTE) && (sec->Characteristics & IMAGE_SCN_MEM_WRITE)) prot = PAGE_EXECUTE_READWRITE;
+
+        ULONG_PTR secAddr = (ULONG_PTR)imageBase + sec->VirtualAddress;
+        SIZE_T secSize = sec->Misc.VirtualSize ? sec->Misc.VirtualSize : sec->SizeOfRawData;
+        if (!secSize) continue;
+
+        // Align to page boundaries for ZwProtectVirtualMemory.
+        ULONG_PTR pageStart = secAddr & ~(ULONG_PTR)0xFFF;
+        SIZE_T pageSize = secSize + (secAddr - pageStart);
+        pageSize = (pageSize + 0xFFF) & ~(SIZE_T)0xFFF;
+
+        PVOID pBase = (PVOID)pageStart;
+        ULONG op = 0;
+        st = ZwProtectVirtualMemory(NtCurrentProcess(), &pBase, &pageSize, prot, &op);
+        if (!NT_SUCCESS(st)) return st;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase,
+                        WCHAR* failModule, ULONG* failReason) {
     if (KeGetCurrentIrql() > PASSIVE_LEVEL) return STATUS_UNSUCCESSFUL;
     if (!pRemoteDll) return STATUS_INVALID_PARAMETER;
 
@@ -524,7 +590,12 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
         goto done;
     }
 
-    status = ResolveImportsRemotely(pRemoteDll, nt);
+    status = ResolveImportsRemotely(pRemoteDll, nt, failModule, failReason);
+    if (!NT_SUCCESS(status)) goto done;
+
+    // Set per-section protections (RX/RW/R) so the image isn't a giant RWX
+    // region. Do this BEFORE any code runs so scanners never observe it RWX.
+    status = ProtectImageSections(pRemoteDll, nt);
     if (!NT_SUCCESS(status)) goto done;
 
     // The client exports ZorMain(), which runs the whole cheat inline on the
@@ -548,9 +619,24 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
         NtCurrentProcess(),
         &stubAddr, 0, &stubSize,
         MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE
+        PAGE_READWRITE
     );
     if (!NT_SUCCESS(status)) goto done;
+
+    // Separate RW page for the flags so the stub itself can be RX-only
+    // (the APC stub must execute; the flags must stay writable).
+    PVOID flagAddr = NULL;
+    SIZE_T flagSize = 0x1000;
+    status = ZwAllocateVirtualMemory(
+        NtCurrentProcess(),
+        &flagAddr, 0, &flagSize,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE
+    );
+    if (!NT_SUCCESS(status)) {
+        ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+        goto done;
+    }
 
 // Create the user thread in the target via SPECIAL USER APC (no
     // NtCreateThreadEx -- Ricochet hooks thread creation). We queue a user
@@ -563,20 +649,22 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
         status = FindTargetThread(p, &threadId);
         if (!NT_SUCCESS(status) || !threadId) {
             status = STATUS_NOT_FOUND;
+            ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
             ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
             goto done;
         }
         status = PsLookupThreadByThreadId((HANDLE)threadId, &hThread);
         if (!NT_SUCCESS(status)) {
+            ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
             ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
             goto done;
         }
     }
 
     // Flags the stub sets: ranFlag = 1 on first instruction (before DllMain),
-    // doneFlag = 1 after the entry point returns. Placed at stub+0x100.
-    volatile LONG* ranFlag = (volatile LONG*)((PUCHAR)stubAddr + 0x100);
-    volatile LONG* doneFlag = (volatile LONG*)((PUCHAR)stubAddr + 0x104);
+    // doneFlag = 1 after the entry point returns. Placed in the separate RW page.
+    volatile LONG* ranFlag = (volatile LONG*)((PUCHAR)flagAddr + 0x0);
+    volatile LONG* doneFlag = (volatile LONG*)((PUCHAR)flagAddr + 0x4);
     *ranFlag = 0;
     *doneFlag = 0;
 
@@ -617,8 +705,23 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
     __except (EXCEPTION_EXECUTE_HANDLER) {
         status = STATUS_ACCESS_VIOLATION;
         ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
         ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
         goto done;
+    }
+
+    // Make the stub executable (RX), keep the flag page RW. No RWX anywhere.
+    {
+        PVOID sb = stubAddr;
+        ULONG op = 0;
+        NTSTATUS pst = ZwProtectVirtualMemory(NtCurrentProcess(), &sb, &stubSize, PAGE_EXECUTE_READ, &op);
+        if (!NT_SUCCESS(pst)) {
+            status = pst;
+            ObDereferenceObject(hThread);
+            ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
+            ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
+            goto done;
+        }
     }
 
     // Deliver the stub via a SPECIAL USER APC. Unlike a normal user APC
@@ -640,6 +743,7 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
     if (!pQueueApc) {
         status = STATUS_PROCEDURE_NOT_FOUND;
         ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
         ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
         goto done;
     }
@@ -648,6 +752,7 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
                        stubAddr, NULL, NULL, NULL);
     if (!NT_SUCCESS(status)) {
         ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
         ZwFreeVirtualMemory(NtCurrentProcess(), &stubAddr, &stubSize, MEM_RELEASE);
         goto done;
     }
@@ -673,7 +778,9 @@ NTSTATUS InjectDLL_Exec(HANDLE pid, PVOID pRemoteDll, PVOID* outBase) {
         ObDereferenceObject(hThread);
     } else {
         // Thread consumed by the cheat; don't touch it. Stub stays mapped.
+        // The flag page is no longer needed (doneFlag already read).
         ObDereferenceObject(hThread);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &flagAddr, &flagSize, MEM_RELEASE);
         if (outBase) *outBase = pRemoteDll;
     }
 
@@ -771,7 +878,10 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
             break;
         }
         PINJECT_EXEC_REQUEST req = (PINJECT_EXEC_REQUEST)buffer;
-        NTSTATUS execStatus = InjectDLL_Exec(req->ProcessId, req->RemoteBase, &req->RemoteBase);
+        req->FailedModule[0] = 0;
+        req->FailReason = 0;
+        NTSTATUS execStatus = InjectDLL_Exec(req->ProcessId, req->RemoteBase,
+            &req->RemoteBase, req->FailedModule, &req->FailReason);
         req->ErrorStatus = execStatus;
         bytes = sizeof(INJECT_EXEC_REQUEST);
         // Always report success so the loader receives ErrorStatus back.

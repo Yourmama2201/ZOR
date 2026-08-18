@@ -489,6 +489,8 @@ typedef struct _INJECT_EXEC_REQUEST {
     HANDLE ProcessId;
     PVOID RemoteBase;
     NTSTATUS ErrorStatus;
+    WCHAR FailedModule[64];
+    ULONG FailReason;
 } INJECT_EXEC_REQUEST, * PINJECT_EXEC_REQUEST;
 
 typedef struct _MEMORY_REQUEST {
@@ -636,9 +638,13 @@ PVOID InjectViaDriver(DWORD pid, PVOID dllData, SIZE_T dllSize) {
     ok = DeviceIoControl(hDevice, IOCTL_INJECT_EXEC, &execReq, sizeof(execReq),
         &execReq, sizeof(execReq), &bytesReturned, NULL);
     if (!ok || !NT_SUCCESS(execReq.ErrorStatus)) {
-        char b[160];
-        sprintf_s(b, "Exec: ioctl=%d lasterr=%u ErrorStatus=0x%08X", ok ? 1 : 0, GetLastError(),
-            (unsigned long)execReq.ErrorStatus);
+        char b[200];
+        std::wstring fmod(execReq.FailedModule);
+        std::string fmodA(fmod.begin(), fmod.end());
+        sprintf_s(b, "Exec: ioctl=%d lasterr=%u ErrorStatus=0x%08X fail=%s (%s)", ok ? 1 : 0,
+            GetLastError(), (unsigned long)execReq.ErrorStatus,
+            fmodA.c_str(), execReq.FailReason == 1 ? "module not loaded" :
+            execReq.FailReason == 2 ? "export not found" : "other");
         g_Debug->Log(b);
         CloseHandle(hDevice);
         return NULL;

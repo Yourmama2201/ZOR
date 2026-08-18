@@ -19,6 +19,8 @@ typedef struct _INJECT_EXEC_REQUEST {
     HANDLE ProcessId;
     PVOID RemoteBase;
     NTSTATUS ErrorStatus;
+    WCHAR FailedModule[64];   // which import failed to resolve (0 = none)
+    ULONG FailReason;         // 0=none, 1=module not found, 2=export not found
 } INJECT_EXEC_REQUEST, * PINJECT_EXEC_REQUEST;
 
 typedef struct _MEMORY_REQUEST {
