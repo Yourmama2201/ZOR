@@ -1,5 +1,5 @@
 ZOR Loader v10.6
-- TEST RELEASE — auto-updater test
+- TEST RELEASE - auto-updater test
 - Updated loader with themed UI, particles, smooth transitions
 - Auto-update checker with GitHub release downloads
 - Feature config panel (cheat toggles pre-injection)
