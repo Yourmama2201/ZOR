@@ -1,0 +1,5 @@
+ZOR Loader v10.0
+- Initial release with auto-updater
+- Kernel map + manual inject (BYOVD)
+- COD MW2 + R6 Siege support
+- Battle.net / Steam / Xbox platforms
